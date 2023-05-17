@@ -25,6 +25,7 @@ int flag_verbose = 0;
 bool flag_debug = false;
 bool flag_kerning = true;
 int flag_point_size = 12;
+int flag_padding = 1;
 int *flag_ranges = NULL;
 
 void print_args( char * name )
@@ -40,6 +41,7 @@ void print_args( char * name )
     fprintf(stderr, "   --no-kerning              Do not export kerning information\n");
     fprintf(stderr, "   -c/--compress             Compress output files (using mksasset)\n");
     fprintf(stderr, "   -d/--debug                Dump also debug images\n");
+    fprintf(stderr, "   -p/--padding              Add additional padding between glyphs in a texture (usage: see shadow effect) (default: 1)\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "It is possible to convert multiple ranges of codepoints, by specifying\n");
     fprintf(stderr, "--range more than one time.\n");
@@ -63,8 +65,8 @@ void n64font_write(rdpq_font_t *fnt, FILE *out)
     w32(out, fnt->num_glyphs);
     w32(out, fnt->num_atlases);
     w32(out, fnt->num_kerning);
+    w32(out, fnt->padding_size); // placeholder
     int off_placeholders = ftell(out);
-    w32(out, (uint32_t)0); // placeholder
     w32(out, (uint32_t)0); // placeholder
     w32(out, (uint32_t)0); // placeholder
     w32(out, (uint32_t)0); // placeholder
@@ -196,11 +198,12 @@ void n64font_addkerning(rdpq_font_t *fnt, int g1, int g2, int kerning)
     fnt->num_kerning++;
 }
 
-rdpq_font_t* n64font_alloc(int point_size)
+rdpq_font_t* n64font_alloc(int point_size, int padding_size)
 {
     rdpq_font_t *fnt = calloc(1, sizeof(rdpq_font_t));
     fnt->magic = FONT_MAGIC_V0;
     fnt->point_size = point_size;
+    fnt->padding_size = padding_size;
     return fnt;
 }
 
@@ -253,7 +256,7 @@ int kerning_cmp(const void *a, const void *b)
     return 0;
 }
 
-int convert(const char *infn, const char *outfn, int point_size, int *ranges)
+int convert(const char *infn, const char *outfn, int point_size, int padding, int *ranges)
 {
     unsigned char *indata = NULL;
     {
@@ -278,7 +281,7 @@ int convert(const char *infn, const char *outfn, int point_size, int *ranges)
     int w = 128, h = 64;  // maximum size for a I4 texture
     unsigned char *pixels = malloc(w * h);
 
-    rdpq_font_t *font = n64font_alloc(point_size);
+    rdpq_font_t *font = n64font_alloc(point_size, padding);
 
     // Map from N64 glyph index to TTF glyph index
     typedef struct { int key; int value; } glyphmap_t;
@@ -312,7 +315,7 @@ int convert(const char *infn, const char *outfn, int point_size, int *ranges)
             // Call stbtt to extract the glyphs into the bitmap.
             // Not all of them will fit, so we need to figure out which ones did.
             stbtt_pack_context spc;
-            stbtt_PackBegin(&spc, pixels, w, h, 0, 1, NULL);
+            stbtt_PackBegin(&spc, pixels, w, h, 0, padding, NULL);
             stbtt_PackSetSkipMissingCodepoints(&spc, 0);
             stbtt_PackFontRanges(&spc, indata, 0, &range, 1);
             stbtt_PackEnd(&spc);
@@ -522,7 +525,18 @@ int main(int argc, char *argv[])
                     return 1;
                 }
                 outdir = argv[i];
-            } else {
+            } else if (!strcmp(argv[i], "-p") || !strcmp(argv[i], "--padding")) {
+                if (++i == argc) {
+                    fprintf(stderr, "missing argument for %s\n", argv[i-1]);
+                    return 1;
+                }
+                char extra;
+                if (sscanf(argv[i], "%d%c", &flag_padding, &extra) != 1) {
+                    fprintf(stderr, "invalid argument for %s: %s\n", argv[i-1], argv[i]);
+                    return 1;
+                }
+            }
+            else {
                 fprintf(stderr, "invalid flag: %s\n", argv[i]);
                 return 1;
             }
@@ -546,7 +560,7 @@ int main(int argc, char *argv[])
         if (flag_verbose)
             printf("Converting: %s -> %s\n",
                 infn, outfn);
-        if (convert(infn, outfn, flag_point_size, flag_ranges) != 0) {
+        if (convert(infn, outfn, flag_point_size, flag_padding, flag_ranges) != 0) {
             error = true;
         } else {
             if (compression) {
