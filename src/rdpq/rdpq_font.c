@@ -32,6 +32,7 @@ static rdpq_tile_t atlas_activate(atlas_t *atlas)
         draw_ctx.atlas_tile = (draw_ctx.atlas_tile + 2) & 7;
         surface_t s = surface_make_linear(atlas->buf, atlas->fmt, atlas->width, atlas->height);
         rdpq_tex_load(draw_ctx.atlas_tile, &s, NULL);
+        rdpq_tex_load(draw_ctx.atlas_tile + 1, &s, &(rdpq_texparms_t){.s.translate = 2, .t.translate = 2});
         draw_ctx.last_atlas = atlas;
     }
     return draw_ctx.atlas_tile;
@@ -52,6 +53,7 @@ rdpq_font_t* rdpq_font_load(const char *fn)
     }
 
     data_cache_hit_writeback(fnt, sz);
+    //assertf(0, "padding = %lu", fnt->padding_size);
     return fnt;
 }
 
@@ -185,10 +187,9 @@ void rdpq_font_printn(rdpq_font_t *fnt, const char *text, int nch)
             rdpq_texture_rectangle_scaled(tile, 
                 draw_ctx.x + g->xoff * draw_ctx.xscale + xpos[i],
                 draw_ctx.y + g->yoff * draw_ctx.yscale,
-                draw_ctx.x + g->xoff2 * draw_ctx.xscale + xpos[i],
-                draw_ctx.y + g->yoff2 * draw_ctx.yscale,
-                g->s, g->t, g->s + width, g->t + height);
-
+                draw_ctx.x + g->xoff2 * draw_ctx.xscale + xpos[i] + 3,
+                draw_ctx.y + g->yoff2 * draw_ctx.yscale + 3,
+                g->s, g->t, g->s + width + 3, g->t + height + 3);
             // Mark the glyph as drawn
             glyphs[i] = -1;
         }
@@ -218,11 +219,18 @@ void rdpq_font_begin(color_t color)
 {
     rdpq_mode_begin();
         rdpq_set_mode_standard();
+        rdpq_mode_combiner(RDPQ_COMBINER2((0,0,0,0), (ENV,0,TEX1,TEX0), (PRIM,0,TEX0,0), (1,COMBINED,PRIM,0)));
+        rdpq_mode_blender(RDPQ_BLENDER((MEMORY_RGB, IN_ALPHA, IN_RGB, ONE)));
+        rdpq_set_env_color(RGBA32(0x00, 0x00, 0x00, 0x80));
+        rdpq_set_prim_color(color);
+    rdpq_mode_end();
+    /*rdpq_mode_begin();
+        rdpq_set_mode_standard();
         rdpq_mode_combiner(RDPQ_COMBINER1((0,0,0,PRIM), (0,0,0,TEX0)));
         rdpq_mode_alphacompare(1);
         rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
         rdpq_set_prim_color(color);
-    rdpq_mode_end();
+    rdpq_mode_end();*/
     draw_ctx = (struct draw_ctx_s){ .xscale = 1, .yscale = 1 };
 }
 
