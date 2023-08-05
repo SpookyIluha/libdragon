@@ -12,6 +12,7 @@ install: all
 	$(MAKE) -C mkfont install
 	$(MAKE) -C mkasset install
 	$(MAKE) -C mkmodel install
+	$(MAKE) -C mkmaterial install
 	$(MAKE) -C n64dso install
 	$(MAKE) -C audioconv64 install
 	$(MAKE) -C rdpvalidate install
@@ -25,6 +26,7 @@ clean:
 	$(MAKE) -C mkfont clean
 	$(MAKE) -C mkasset clean
 	$(MAKE) -C mkmodel clean
+	$(MAKE) -C mkmaterial clean
 	$(MAKE) -C n64dso clean
 	$(MAKE) -C audioconv64 clean
 	$(MAKE) -C rdpvalidate clean
@@ -68,6 +70,10 @@ mkasset:
 .PHONY: mkmodel
 mkmodel:
 	$(MAKE) -C mkmodel
+
+.PHONY: mkmaterial
+mkmaterial:
+	$(MAKE) -C mkmaterial
 
 .PHONY: n64dso
 n64dso:
