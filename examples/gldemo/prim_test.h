@@ -196,6 +196,9 @@ void render_primitives(float rotation)
     // Transparent polygons should not write to the depth buffer
     glDepthMask(GL_FALSE);
 
+    // Configure line thickness for better visual quality
+    glLineWidth(2);
+
     prim_test();
     
     glDepthMask(GL_TRUE);

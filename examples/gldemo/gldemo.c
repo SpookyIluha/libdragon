@@ -118,21 +118,14 @@ void setup()
 
     glGenTextures(4, textures);
 
-    #if 0
-    GLenum min_filter = GL_LINEAR_MIPMAP_LINEAR;
-    #else
-    GLenum min_filter = GL_LINEAR;
-    #endif
-
-
     for (uint32_t i = 0; i < 4; i++)
     {
         glBindTexture(GL_TEXTURE_2D, textures[i]);
 
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, min_filter);
-
         glSpriteTextureN64(GL_TEXTURE_2D, sprites[i], &(rdpq_texparms_t){.s.repeats = REPEAT_INFINITE, .t.repeats = REPEAT_INFINITE});
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     }
 }
 

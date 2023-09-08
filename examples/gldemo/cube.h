@@ -91,6 +91,10 @@ void render_cube()
     // Apply to ambient and diffuse material properties
     glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
 
+    // Since the cube is interpenetrating into the floor, activate interpenetrating AA support
+    // Notice how this should only be active when absolutely necessary as this method is not cheap.
+    glDepthFunc(GL_LESS_INTERPENETRATING_N64);
+
     draw_cube();
     
     glDisable(GL_COLOR_MATERIAL);

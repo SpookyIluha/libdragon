@@ -77,6 +77,8 @@ void render_skinned(const camera_t *camera, float animation)
 
     glMatrixMode(GL_MODELVIEW);
 
+    glDepthFunc(GL_LESS);
+
     glDisable(GL_CULL_FACE);
     draw_skinned();
     glEnable(GL_CULL_FACE);
