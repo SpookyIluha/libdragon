@@ -482,6 +482,20 @@ void mixer_remove_event(MixerEvent cb, void *ctx);
 typedef void (*WaveformRead)(void *ctx, samplebuffer_t *sbuf, int wpos, int wlen, bool seeking);
 
 /**
+ * @brief Waveform callback function invoked by the mixer whenever the playback
+ *        is stopped.
+ * 
+ * The callback function is invoked whenever a waveform playback stops, which is
+ * one of the following reasons:
+ * 
+ *  * The waveform reaches its end, and it does not contain any loop.
+ *  * Another waveform was started in the same channel via #mixer_ch_play,
+ *    causing the current waveform to stop.
+ *  * #mixer_ch_stop was explicitly called to stop playback of the waveform.
+ */
+typedef void (*WaveformStop)(void *ctx);
+
+/**
  * @brief A waveform that can be played back through the mixer.
  * 
  * waveform_t represents a waveform that can be played back by the mixer.
@@ -547,8 +561,21 @@ typedef struct waveform_s {
      */
 	WaveformRead read;
 
-	/** @brief Opaque pointer provided as context to the read function. */
+     /**
+      * @brief Waveform stop function
+      * 
+      * This optional function is invoked by the mixer when the waveform
+      * playback is stopped.
+      */
+     WaveformStop wv_stop;
+
+	/** @brief Opaque pointer provided as context to the read and stop functions. */
 	void *ctx;
+
+     ///@cond
+     ///  Mixer private state. Do not touch, initialize to zero
+     uint32_t __uuid;
+     ///@endcond
 } waveform_t;
 
 /** @brief Maximum number of samples in a waveform */
