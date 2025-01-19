@@ -108,7 +108,8 @@ static int wav64_none_get_bitrate(wav64_t *wav) {
 
 wav64_t* internal_open(wav64_t *wav, const char *file_name, wav64_loadparms_t *parms)
 {
-	if (!parms) parms = &(wav64_loadparms_t){0};
+	wav64_loadparms_t default_parms = {0};
+	if (!parms) parms = &default_parms;
 
 	// For backwards compatibility with old versions of this file, we support
 	// an unprefixed file name as a dfs file. This is deprecated and not documented
@@ -204,7 +205,6 @@ wav64_t* wav64_load(const char *file_name, wav64_loadparms_t *parms)
 
 
 void __wav64_channel_stopped(wav64_t *wav, int chidx) {
-	debugf("wav64: channel %d stopped for %s\n", chidx, wav->wave.name);
 	assert(chidx >= 0 && chidx < wav->st->nsimul);
 	assert(wav->st->mixer_channels[chidx] >= 0);
 	wav->st->mixer_channels[chidx] = -1;
