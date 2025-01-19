@@ -489,17 +489,7 @@ void mixer_ch_stop(int ch) {
 	// waveform, we will realize that by the uuid, and reuse the same
 	// samplebuffer contents.
 	c->wave = NULL;
-}
-
-void __mixer_wave_stopall(waveform_t *wave)
-{
-	for (int i=0; i<Mixer.num_channels; i++)
-	{
-		// Check if this channel is playing back the waveform.
-		mixer_channel_t *c = &Mixer.channels[i];
-		if (c->wave == wave)
-			mixer_ch_stop(i);
-	}
+	c->ctx = NULL;
 }
 
 bool mixer_ch_playing(int ch) {

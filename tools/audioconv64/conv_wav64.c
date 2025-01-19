@@ -263,18 +263,31 @@ int wav_convert(const char *infn, const char *outfn) {
 
 	char id[4] = "WV64";
 	fwrite(id, 1, 4, out);
-	w8(out, WAV64_FILE_VERSION);
-	w8(out, flag_wav_compress);
-	w8(out, wav.channels);
+	w8(out, 3); 				 			// version
+	w8(out, flag_wav_compress);  			// format
+	w32_placeholderf(out, "samples");		// offset where samples begin
+	w32_placeholderf(out, "state_size");    // size of per-mixer-channel state to allocate at runtime
+
+	// Serialize a waveform_t
+	w32_placeholderf(out, "name");
 	w8(out, nbits);
-	w32(out, wav.sampleRate);
+	w8(out, wav.channels);
+	w16(out, 0); 							// padding
+	wf32(out, wav.sampleRate);
 	w32(out, cnt);
 	w32(out, loop_len);
-	int wstart_offset = w32_placeholder(out); // start_offset (to be filled later)
+	w32(out, 0);                            // WaveformRead
+	w32(out, 0);                            // WaveformStop
+	w32(out, 0);							// Context
+	w32(out, 0);							// Mixer UUID
 
 	switch (flag_wav_compress) {
 	case 0: { // no compression
-		w32_at(out, wstart_offset, ftell(out));
+		// Uncompressed waveforms need to no state (0 bytes).
+		placeholder_set_offset(out, 0, "state_size");
+
+		// Start of the samples data
+		placeholder_set(out, "samples");
 		int16_t *sptr = wav.samples;
 		for (int i=0;i<cnt*wav.channels;i++) {
 			// Byteswap *sptr
@@ -290,6 +303,10 @@ int wav_convert(const char *infn, const char *outfn) {
 	} break;
 
 	case 1: { // vadpcm
+		// The state is 16 bytes per channel, but the runtime code requires to
+		// always allocate both channels even for mono files.
+		placeholder_set_offset(out, 32, "state_size");
+
 		// We need cnt to be a multiple of kVADPCMFrameSampleCount (16) because
 		// VADPCM are compressed using 16-sample frames.
 		// In addition to that, our RSP decompressor at the moment only supports
@@ -334,12 +351,12 @@ int wav_convert(const char *infn, const char *outfn) {
 		w32(out, 0); // padding
 		fwrite(&state, 1, sizeof(struct vadpcm_vector), out);   // TBC: loop_state[0]
 		fwrite(&state, 1, sizeof(struct vadpcm_vector), out);   // TBC: loop_state[1]
-		fwrite(&state, 1, sizeof(struct vadpcm_vector), out);   // state
-		fwrite(&state, 1, sizeof(struct vadpcm_vector), out);   // state
 		for (int i=0; i<kPREDICTORS * kVADPCMEncodeOrder * wav.channels; i++)    // codebook
 			for (int j=0; j<8; j++)
 				w16(out, codebook[i].v[j]);
-		w32_at(out, wstart_offset, ftell(out));
+		
+		// Start of samples data
+		placeholder_set(out, "samples");
 		for (int i=0;i<nframes;i++) {
 			for (int j=0;j<wav.channels;j++)
 				fwrite(dest + (j * nframes + i) * kVADPCMFrameByteSize, 1, kVADPCMFrameByteSize, out);
@@ -382,7 +399,14 @@ int wav_convert(const char *infn, const char *outfn) {
 		w32(out, frame_size);
 		uint32_t max_cmp_size_pos = w32_placeholder(out);  // max compressed frame size
 		w32(out, bitrate_bps);
-		w32_at(out, wstart_offset, ftell(out));
+		w32(out, 0);				// custom mode pointer at runtime
+		placeholder_set(out, "samples");
+
+		// Ask the size of the decoder state to the opus library. This is computed on x86-64
+		// so it could be larger than on the N64, but it's a good approximation.
+		// Add 16 because OpusDecoder has a 16-byte internal alingment, so we add
+		// some margin. The value is asserted at runtime anyway.
+		placeholder_set_offset(out, 16+opus_custom_decoder_get_size(custom_mode, wav.channels), "state_size");
 
 		// Configure opus encoder. We use VBR as it provides the best
 		// compression/quality balance and we don't have specific constraints
