@@ -186,8 +186,6 @@ wav64_t* internal_open(wav64_t *wav, const char *file_name, wav64_loadparms_t *p
 	wav->st->ext = heap + heap_off_ext;
 	wav->st->states = heap + heap_off_chstate;
 	wav->st->samples = NULL;
-	debugf("wav64: allocated state=%p[%d] ext=%p[%d] states=%p[%d]\n",
-		heap, heap_off_ext, wav->st->ext, heap_off_chstate, wav->st->states, heap_size - heap_off_chstate);
 
 	// Fill waveforms struct
 	memset(&wav->wave, 0, sizeof(waveform_t));
@@ -216,7 +214,7 @@ wav64_t* internal_open(wav64_t *wav, const char *file_name, wav64_loadparms_t *p
 
 	// Preload the samples if requested
 	if (preload) {
-		data_cache_hit_invalidate(heap + heap_off_samples, preload_size);
+		data_cache_hit_invalidate(heap + heap_off_samples, preload_size+preload_extra_alloc);
 		wav->st->samples = UncachedAddr(heap + heap_off_samples);
 
 		int wlen = wav->wave.len;
@@ -225,6 +223,7 @@ wav64_t* internal_open(wav64_t *wav, const char *file_name, wav64_loadparms_t *p
 		samplebuffer_set_bps(&sbuf, wav->wave.bits);
 		samplebuffer_set_waveform(&sbuf, &wav->wave, wav->wave.read, 0);
 		samplebuffer_get(&sbuf, 0, &wlen);
+		rspq_highpri_sync();
 		assertf(wlen == wav->wave.len, "wav64: preload failed for %s: wlen=%x/%x", wav->wave.name, wlen, wav->wave.len);
 
 		// Now remove the extra allocation
