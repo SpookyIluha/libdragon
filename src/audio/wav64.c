@@ -92,10 +92,23 @@ static void wav64_none_read(void *ctx, samplebuffer_t *sbuf, int wpos, int wlen,
 	raw_waveform_read(sbuf, wav->st->current_fd, wpos, wlen, bps);
 }
 
+static void wav64_none_read_memcopy(void *ctx, samplebuffer_t *sbuf, int wpos, int wlen, bool seeking) {
+	wav64_t *wav = (wav64_t*)sbuf->wave;
+	int bps = (wav->wave.bits == 8 ? 0 : 1) + (wav->wave.channels == 2 ? 1 : 0);
+	
+	uint8_t* src_addr = wav->st->samples + (wpos << bps);
+	uint8_t* dst_addr = (uint8_t*)samplebuffer_append(sbuf, wlen);
+	memcpy(dst_addr, src_addr, wlen << bps);
+}
+
 static void wav64_none_init(wav64_t *wav, int state_size) {
 	// Initialize none compression. Setup read callback
-	wav->wave.read = wav64_none_read;
-
+	if (!wav->st->samples) {
+		wav->wave.read = wav64_none_read;
+	} else {
+		wav->wave.read = wav64_none_read_memcopy;
+	}
+	
 	// NOTE: we don't need a stop callback because the none compression mode
 	// supports infinite simultaneous playbacks, so there's nothing to track
 	assert(wav->st->nsimul == 0);
@@ -121,10 +134,10 @@ wav64_t* internal_open(wav64_t *wav, const char *file_name, wav64_loadparms_t *p
 		file_name = dfs_name;
 	}
 
-	// Open the input file.
+	// Open the input file, and read the header
 	int file_handle = must_open(file_name);
 
-	wav64_file_header_t head;
+	wav64_header_t head;
 	read(file_handle, &head, sizeof(head));
 
 	if (memcmp(head.id, WAV64_ID, 4) != 0) {
@@ -139,44 +152,55 @@ wav64_t* internal_open(wav64_t *wav, const char *file_name, wav64_loadparms_t *p
 	assertf(head.format < WAV64_NUM_FORMATS && algos[head.format].init != NULL,
         "wav64: compression level %d not initialized. Call wav64_init_compression(%d) at initialization time", head.format, head.format);
 
-	int ext_size = head.start_offset - sizeof(waveform_t) - sizeof(wav64_file_header_t);
+	int ext_size = head.start_offset - sizeof(wav64_header_t);
 	int nsimul = parms->max_simultaneous_playbacks ? parms->max_simultaneous_playbacks : algos[head.format].default_simul;
+	bool preload = parms->streaming_mode == WAV64_STREAMING_NONE;
+	int preload_size = ROUND_UP(head.len * head.channels * (head.nbits >> 3), 16);
+	int preload_extra_alloc = ROUND_UP(head.format == WAV64_FORMAT_RAW ? 0 : 4096, 16);
 
 	// Calculate required allocation
 	int heap_size = 0;
-	heap_size += sizeof(wav64_state_t) + nsimul * sizeof(int8_t);	// wav64_state_t
-	heap_size = ROUND_UP(heap_size, 16);							// Align to 16 bytes
+	heap_size += ROUND_UP(sizeof(wav64_state_t) + nsimul, 16);		// wav64_state_t
 
 	int heap_off_waveform = heap_size;
-	if (wav == NULL) {
-		heap_size += sizeof(waveform_t);								// Waveform
-		heap_size = ROUND_UP(heap_size, 16);							// Align to 16 bytes
-	}
+	if (!wav) heap_size += ROUND_UP(sizeof(waveform_t), 16);		// Waveform
+
+	int heap_off_samples = heap_size;
+	if (preload) heap_size += preload_size;							// Preloaded samples
+
+	int heap_off_preload_end = heap_size;
+	if (preload) heap_size += preload_extra_alloc;					// Extra allocation for preload
 
 	int heap_off_ext = heap_size;
-	heap_size += ext_size; 											// Extended header data
-	heap_size = ROUND_UP(heap_size, 16);							// Align to 16 bytes
+	heap_size += ROUND_UP(ext_size, 16);							// Extended header data
 
 	int heap_off_chstate = heap_size;
-	heap_size += nsimul * head.state_size;							// Per-channel state
-	heap_size = ROUND_UP(heap_size, 16);							// Align to 16 bytes
+	heap_size += ROUND_UP(nsimul * head.state_size, 16);			// Per-channel state
 	
 	// Allocate heap memory
+	assert(heap_size % 16 == 0);
 	void *heap = memalign(16, heap_size);
 	assertf(heap != NULL, "wav64: failed to allocate %d bytes for %s", heap_size, file_name);
 	if (!wav) wav = heap + heap_off_waveform;
 	wav->st = heap;
 	wav->st->ext = heap + heap_off_ext;
 	wav->st->states = heap + heap_off_chstate;
+	wav->st->samples = NULL;
 	debugf("wav64: allocated state=%p[%d] ext=%p[%d] states=%p[%d]\n",
 		heap, heap_off_ext, wav->st->ext, heap_off_chstate, wav->st->states, heap_size - heap_off_chstate);
 
-	// Read waveforms
-	read(file_handle, &wav->wave, sizeof(waveform_t));
+	// Fill waveforms struct
+	memset(&wav->wave, 0, sizeof(waveform_t));
+	wav->wave.name = file_name;
+	wav->wave.channels = head.channels;
+	wav->wave.bits = head.nbits;
+	wav->wave.frequency = head.freq;
+	wav->wave.len = head.len;
+	wav->wave.loop_len = head.loop_len;
 
 	// Read ext data
 	read(file_handle, wav->st->ext, ext_size);
-	data_cache_hit_writeback_invalidate(wav->st->ext, ext_size);
+	data_cache_hit_writeback(wav->st->ext, ext_size);
 
 	// Finish initialization of wav64 state
 	wav->st->format = head.format;
@@ -189,6 +213,34 @@ wav64_t* internal_open(wav64_t *wav, const char *file_name, wav64_loadparms_t *p
 
 	// Initialize the compression algorithm
 	algos[wav->st->format].init(wav, head.state_size);
+
+	// Preload the samples if requested
+	if (preload) {
+		data_cache_hit_invalidate(heap + heap_off_samples, preload_size);
+		wav->st->samples = UncachedAddr(heap + heap_off_samples);
+
+		int wlen = wav->wave.len;
+		samplebuffer_t sbuf;
+		samplebuffer_init(&sbuf, wav->st->samples, preload_size + preload_extra_alloc);
+		samplebuffer_set_bps(&sbuf, wav->wave.bits);
+		samplebuffer_set_waveform(&sbuf, &wav->wave, wav->wave.read, 0);
+		samplebuffer_get(&sbuf, 0, &wlen);
+		assertf(wlen == wav->wave.len, "wav64: preload failed for %s: wlen=%x/%x", wav->wave.name, wlen, wav->wave.len);
+
+		// Now remove the extra allocation
+		if (algos[wav->st->format].close)
+			algos[wav->st->format].close(wav);
+
+		wav->st = realloc(wav->st, heap_off_preload_end);
+		wav->st->ext = NULL;
+		wav->st->states = NULL;
+		wav->st->nsimul = 0;
+
+		// Reinitialize as RAW format after preloading
+		wav->st->format = WAV64_FORMAT_RAW;
+		algos[wav->st->format].init(wav, head.state_size);
+	}
+
 	return wav;
 }
 

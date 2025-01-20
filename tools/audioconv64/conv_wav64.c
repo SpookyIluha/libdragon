@@ -265,21 +265,13 @@ int wav_convert(const char *infn, const char *outfn) {
 	fwrite(id, 1, 4, out);
 	w8(out, 3); 				 			// version
 	w8(out, flag_wav_compress);  			// format
+	w8(out, wav.channels);					// channels
+	w8(out, nbits);							// bits
+	w32(out, wav.sampleRate);				// frequency
+	w32(out, cnt);							// len
+	w32(out, loop_len);						// loop_len
 	w32_placeholderf(out, "samples");		// offset where samples begin
 	w32_placeholderf(out, "state_size");    // size of per-mixer-channel state to allocate at runtime
-
-	// Serialize a waveform_t
-	w32_placeholderf(out, "name");
-	w8(out, nbits);
-	w8(out, wav.channels);
-	w16(out, 0); 							// padding
-	wf32(out, wav.sampleRate);
-	w32(out, cnt);
-	w32(out, loop_len);
-	w32(out, 0);                            // WaveformRead
-	w32(out, 0);                            // WaveformStop
-	w32(out, 0);							// Context
-	w32(out, 0);							// Mixer UUID
 
 	switch (flag_wav_compress) {
 	case 0: { // no compression

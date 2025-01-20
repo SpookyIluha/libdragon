@@ -22,23 +22,17 @@ typedef struct __attribute__((packed)) {
 	int32_t freq;           ///< Default playback frequency
 	int32_t len;            ///< Length of the file (in samples)
 	int32_t loop_len;       ///< Length of the loop since file end (or 0 if no loop)
-	int32_t start_offset;   ///< Offset of the first sample in the file
-} wav64_header_t;
-
-_Static_assert(sizeof(wav64_header_t) == 24, "invalid wav64_header size");
-
-typedef struct __attribute__((packed)) {
-	char id[4];             ///< ID of the file (WAV64_ID)
-	int8_t version;         ///< Version of the file (WAV64_FILE_VERSION)
-	int8_t format;          ///< Format of the file (WAV64_FORMAT_RAW)
 	uint32_t start_offset;  ///< Offset of the first sample in the file
 	uint32_t state_size;    ///< Size of per-mixer-channel state to allocate at runtime
-} wav64_file_header_t;
+} wav64_header_t;
+
+_Static_assert(sizeof(wav64_header_t) == 28, "invalid wav64_header size");
 
 typedef struct wav64_state_s {
 	int format;			     // Internal format of the file
 	void *ext;               // Pointer to extended header data (format-dependent)
 	void *states;            // Pointer to per-mixer-channel state data (format-dependent)
+	void *samples;           // Pointer to the preloaded samples (if streaming is disabled)
 	int current_fd;			 // File descriptor for the wav64 file
 	int base_offset;		 // Start of Wav64 data (as offset from start of the file)
 	int nsimul;				 // Number of maximum simultaneous playbacks
