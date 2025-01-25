@@ -16,8 +16,10 @@ typedef struct __attribute__((packed, aligned(8))) {
 	wav64_vadpcm_vector_t codebook[];	///< Codebook of the predictors
 } wav64_header_vadpcm_t;
 
+/** @brief WAV64 VADPCM decoding state (for a single mixer channel) */
 typedef struct {
 	wav64_vadpcm_vector_t state[2];		///< Current decompression state
+	int bitpos;							///< Current bit position in the input buffer
 } wav64_state_vadpcm_t;
 
 

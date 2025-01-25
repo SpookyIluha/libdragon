@@ -85,6 +85,7 @@ typedef struct wav64_s {
  */ 
 void wav64_open(wav64_t *wav, const char *fn);
 
+/** @brief WAV64 streaming mode */
 typedef enum {
 	/** 
 	 * @brief Full streaming
@@ -108,6 +109,7 @@ typedef enum {
 
 } wav64_streaming_mode_t;
 
+/** @brief WAV64 loading parameters (to be passed to #wav64_load) */
 typedef struct {
 	/** 
 	 * @brief Maximum number of simultaneous playbacks 

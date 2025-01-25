@@ -28,16 +28,17 @@ typedef struct __attribute__((packed)) {
 
 _Static_assert(sizeof(wav64_header_t) == 28, "invalid wav64_header size");
 
+/** @brief WAV64 state */
 typedef struct wav64_state_s {
-	int format;			     // Internal format of the file
-	void *ext;               // Pointer to extended header data (format-dependent)
-	void *states;            // Pointer to per-mixer-channel state data (format-dependent)
-	void *samples;           // Pointer to the preloaded samples (if streaming is disabled)
-	int current_fd;			 // File descriptor for the wav64 file
-	int base_offset;		 // Start of Wav64 data (as offset from start of the file)
-	int nsimul;				 // Number of maximum simultaneous playbacks
-	uint8_t flags;           // Misc flags
-	int8_t mixer_channels[]; // Mixer channels in which the waveform is reproduced
+	int format;			     ///< Internal format of the file
+	void *ext;               ///< Pointer to extended header data (format-dependent)
+	void *states;            ///< Pointer to per-mixer-channel state data (format-dependent)
+	void *samples;           ///< Pointer to the preloaded samples (if streaming is disabled)
+	int current_fd;			 ///< File descriptor for the wav64 file
+	int base_offset;		 ///< Start of Wav64 data (as offset from start of the file)
+	int nsimul;				 ///< Number of maximum simultaneous playbacks
+	uint8_t flags;           ///< Misc flags
+	int8_t mixer_channels[]; ///< Mixer channels in which the waveform is reproduced
 } wav64_state_t;
 
 /** @brief WAV64 pluggable compression algorithm */

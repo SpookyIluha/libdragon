@@ -119,7 +119,7 @@ static int wav64_none_get_bitrate(wav64_t *wav) {
 	return wav->wave.frequency * wav->wave.channels * wav->wave.bits;
 }
 
-wav64_t* internal_open(wav64_t *wav, const char *file_name, wav64_loadparms_t *parms)
+static wav64_t* internal_open(wav64_t *wav, const char *file_name, wav64_loadparms_t *parms)
 {
 	wav64_loadparms_t default_parms = {0};
 	if (!parms) parms = &default_parms;
