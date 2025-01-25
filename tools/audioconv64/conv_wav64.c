@@ -8,6 +8,7 @@
 
 #include "vadpcm/vadpcm.h"
 #include "vadpcm/encode.c"
+#include "vadpcm/decode.c"
 #include "vadpcm/error.c"
 
 #include "../common/binout.c"
@@ -355,6 +356,42 @@ int wav_convert(const char *infn, const char *outfn) {
 		}
 		free(dest);
 		free(scratch);
+
+		if (flag_debug) {
+			char* wav2fn = changeext(outfn, ".vadpcm.wav");
+			if (flag_verbose)
+				fprintf(stderr, "  writing uncompressed file %s\n", wav2fn);
+
+			
+			int16_t *out_samples = malloc(cnt * wav.channels * sizeof(int16_t));
+			int16_t *out_channel = malloc(cnt * sizeof(int16_t));
+			for (int i=0;i<wav.channels;i++) {		
+
+				memset(&state, 0, sizeof(state));
+				vadpcm_decode(kPREDICTORS, kVADPCMEncodeOrder,
+					codebook + kPREDICTORS * kVADPCMEncodeOrder * i,
+					&state, nframes, out_channel, dest + i * nframes * kVADPCMFrameByteSize);
+				for (int j=0;j<cnt;j++)
+					out_samples[i + j*wav.channels] = out_channel[j];
+			}
+			free(out_channel);
+
+			drwav_data_format fmt = {
+				.container = drwav_container_riff,
+				.format = DR_WAVE_FORMAT_PCM,
+				.channels = wav.channels,
+				.sampleRate = wav.sampleRate,
+				.bitsPerSample = 16,
+			};
+			drwav wav2;
+			if (!drwav_init_file_write(&wav2, wav2fn, &fmt, NULL)) {
+				fprintf(stderr, "ERROR: %s: cannot create WAV file\n", outfn);
+				failed = true;
+			} else {
+				drwav_write_pcm_frames(&wav2, cnt, out_samples);
+				drwav_uninit(&wav2);
+			}
+		}
 	} break;
 
 	case 3: { // opus
