@@ -176,7 +176,7 @@
 	RSPQ_BeginOverlayHeader
 		RSPQ_DefineCommand command_exec, 16				# 0x0
 		RSPQ_DefineCommand VADPCM_Decompress, 16		# 0x1
-		RSPQ_DefineCommand VADPCM_SetState, 16			# 0x2
+		RSPQ_DefineCommand VADPCM_SetState, 8			# 0x2
 	RSPQ_EndOverlayHeader
 
 ############################################################################
