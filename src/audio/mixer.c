@@ -412,9 +412,14 @@ void mixer_ch_play_ctx(int ch, waveform_t *wave, void *ctx) {
 	// wants to play the same waveform on the same channel multiple
 	// times, and the waveform has been already decoded and cached
 	// in the sample buffer.
-	// Notice that we compare the UUID rather than the pointer because
-	// the pointer might have been freed and reallocated.
-	if (wave->__uuid != c->wave_uuid) {
+	// We compare:
+	//  - The UUID of the waveform (not the wave pointer, as that
+	//    could have been even recycled by the caller)
+	//  - The context pointer: if that changes, probably the internal
+	//    state of the callback is also different (eg: compression state),
+	//    so the next (not already buffered) sample could cause
+	//    an error because it'd be decompressed with the wrong state.
+	if (wave->__uuid != c->wave_uuid || ctx != sbuf->wv_ctx) {
 		samplebuffer_flush(sbuf);
 
 		// If this channel is playing something else, stop it
