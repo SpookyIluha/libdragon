@@ -217,8 +217,10 @@ static void waveform_vadpcm_read(void *ctx, samplebuffer_t *sbuf, int wpos, int 
     int chidx = (int)ctx;
     assert(chidx >= 0 && chidx <= wav->st->nsimul);
     wav64_state_vadpcm_t *vstate = &((wav64_state_vadpcm_t*)wav->st->states)[chidx];
+	bool highpri = false;
 
 	if (seeking) {
+        rspq_highpri_begin();
 		if (wpos == 0) {
             rsp_vadpcm_copystate(vstate->state, NULL);
 			lseek(wav->st->current_fd, wav->st->base_offset, SEEK_SET);
@@ -230,6 +232,7 @@ static void waveform_vadpcm_read(void *ctx, samplebuffer_t *sbuf, int wpos, int 
 			lseek(wav->st->current_fd, (wav->wave.len - wav->wave.loop_len) / 16 * 9, SEEK_CUR);
             // vstate->bitpos = ???; FIXME: we need bitpos for the loop state
 		}
+        rspq_highpri_end();
 	} else {
         assert((wpos % 16) == 0);
 
@@ -250,7 +253,6 @@ static void waveform_vadpcm_read(void *ctx, samplebuffer_t *sbuf, int wpos, int 
 	// RSP call. Keep this in sync with rsp_mixer.S.
 	enum { MAX_VADPCM_FRAMES = 94 };
 
-	bool highpri = false;
 	while (wlen > 0) {
 		// Calculate number of frames to decompress in this iteration
 		int max_vadpcm_frames = (wav->wave.channels == 1) ? MAX_VADPCM_FRAMES : MAX_VADPCM_FRAMES / 2;
