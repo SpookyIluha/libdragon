@@ -30,6 +30,8 @@
 
 #include "../../src/audio/libopus.c"
 
+#include "huff_vadpcm.c"
+
 bool flag_wav_looping = false;
 int flag_wav_looping_offset = 0;
 int flag_wav_compress = 1;
@@ -296,9 +298,11 @@ int wav_convert(const char *infn, const char *outfn) {
 	} break;
 
 	case 1: { // vadpcm
+		bool huffman = true;
+
 		// The state is 16 bytes per channel, but the runtime code requires to
 		// always allocate both channels even for mono files.
-		placeholder_set_offset(out, 32, "state_size");
+		placeholder_set_offset(out, 48, "state_size");
 
 		// We need cnt to be a multiple of kVADPCMFrameSampleCount (16) because
 		// VADPCM are compressed using 16-sample frames.
@@ -325,8 +329,8 @@ int wav_convert(const char *infn, const char *outfn) {
 			fprintf(stderr, "  compressing into VADPCM format (%d frames)\n", nframes);
 
 		int16_t *schan = malloc(cnt * sizeof(int16_t));
-		uint8_t *destchan = dest;
 		for (int i=0; i<wav.channels; i++) {
+			uint8_t *destchan = malloc(nframes * kVADPCMFrameByteSize);
 			for (int j=0; j<cnt; j++)
 				schan[j] = wav.samples[i + j*wav.channels];
 			vadpcm_error err = vadpcm_encode(&parms, codebook + kPREDICTORS * kVADPCMEncodeOrder * i, nframes, destchan, schan, scratch);
@@ -334,45 +338,66 @@ int wav_convert(const char *infn, const char *outfn) {
 				fprintf(stderr, "VADPCM encoding error: %s\n", vadpcm_error_name(err));
 				return 1;
 			}
-			destchan += nframes * kVADPCMFrameByteSize;
+			for (int j=0; j<nframes; j++)
+				memcpy(dest + (i + wav.channels * j) * kVADPCMFrameByteSize, destchan + j * kVADPCMFrameByteSize, kVADPCMFrameByteSize);
+			free(destchan);
 		}
+		free(scratch);
+
+		const int maxcompbuflen = nframes * kVADPCMFrameByteSize * wav.channels;
+		uint8_t *compbuf = malloc(maxcompbuflen);
+		uint8_t *ctxbuf = calloc(HUFF_CONTEXT_LEN, 1);
+		int compbuflen = 0;
+		if (huffman) 
+			compbuflen = huffv_compress(dest, nframes * kVADPCMFrameByteSize * wav.channels, compbuf, maxcompbuflen, ctxbuf, HUFF_CONTEXT_LEN);
+
+		if (flag_verbose)
+			fprintf(stderr, "  huffman compressed %d bytes into %d bytes (ratio: %.1f)\n", 
+				nframes * kVADPCMFrameByteSize * wav.channels, compbuflen,
+				100.0f * compbuflen / (nframes * kVADPCMFrameByteSize * wav.channels));
+
+		uint8_t flags = 0;
+		if (huffman) flags |= (1<<0);
 
 		struct vadpcm_vector state = {0};
 		w8(out, kPREDICTORS);
 		w8(out, kVADPCMEncodeOrder);
-		w16(out, 0); // padding
+		w8(out, flags);
+		w8(out, 0);  // padding
 		w32(out, 0); // padding
 		fwrite(&state, 1, sizeof(struct vadpcm_vector), out);   // TBC: loop_state[0]
 		fwrite(&state, 1, sizeof(struct vadpcm_vector), out);   // TBC: loop_state[1]
+		fwrite(ctxbuf, 1, HUFF_CONTEXT_LEN, out);				// Huffman context
 		for (int i=0; i<kPREDICTORS * kVADPCMEncodeOrder * wav.channels; i++)    // codebook
 			for (int j=0; j<8; j++)
 				w16(out, codebook[i].v[j]);
-		
+
 		// Start of samples data
 		placeholder_set(out, "samples");
-		for (int i=0;i<nframes;i++) {
-			for (int j=0;j<wav.channels;j++)
-				fwrite(dest + (j * nframes + i) * kVADPCMFrameByteSize, 1, kVADPCMFrameByteSize, out);
-		}
-		free(dest);
-		free(scratch);
+		if (huffman)
+			fwrite(compbuf, 1, compbuflen, out);
+		else
+			fwrite(dest, 1, nframes * kVADPCMFrameByteSize * wav.channels, out);
 
 		if (flag_debug) {
 			char* wav2fn = changeext(outfn, ".vadpcm.wav");
 			if (flag_verbose)
 				fprintf(stderr, "  writing uncompressed file %s\n", wav2fn);
-
 			
 			int16_t *out_samples = malloc(cnt * wav.channels * sizeof(int16_t));
 			int16_t *out_channel = malloc(cnt * sizeof(int16_t));
 			for (int i=0;i<wav.channels;i++) {		
+				uint8_t *in_channel = malloc(nframes * kVADPCMFrameByteSize);
+				for (int j=0;j<nframes;j++)
+					memcpy(in_channel + j * kVADPCMFrameByteSize, dest + (i + wav.channels * j) * kVADPCMFrameByteSize, kVADPCMFrameByteSize);
 
 				memset(&state, 0, sizeof(state));
 				vadpcm_decode(kPREDICTORS, kVADPCMEncodeOrder,
 					codebook + kPREDICTORS * kVADPCMEncodeOrder * i,
-					&state, nframes, out_channel, dest + i * nframes * kVADPCMFrameByteSize);
+					&state, nframes, out_channel, in_channel);
 				for (int j=0;j<cnt;j++)
 					out_samples[i + j*wav.channels] = out_channel[j];
+				free(in_channel);
 			}
 			free(out_channel);
 
@@ -392,6 +417,10 @@ int wav_convert(const char *infn, const char *outfn) {
 				drwav_uninit(&wav2);
 			}
 		}
+
+		free(dest);
+		free(compbuf);
+		free(ctxbuf);
 	} break;
 
 	case 3: { // opus
