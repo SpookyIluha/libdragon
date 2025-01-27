@@ -109,7 +109,7 @@ int __rdpq_sprite_upload(rdpq_tile_t tile, sprite_t *sprite, const rdpq_texparms
         rdpq_tex_upload(tile, &surf, &mergedtexparms);
 
     // Upload mipmaps if any
-    int num_mipmaps = 1;
+    int num_mipmaps = 0;
     rdpq_texparms_t lod_parms;
     for (int i=1; i<8; i++) {
         surf = sprite_get_lod_pixels(sprite, i);
