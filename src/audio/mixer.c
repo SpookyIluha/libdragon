@@ -377,11 +377,8 @@ static void waveform_read(void *ctx, samplebuffer_t *sbuf, int wpos, int wlen, b
 	}
 }
 
-void mixer_ch_play(int ch, waveform_t *wave) {
-	mixer_ch_play_ctx(ch, wave, wave->ctx);
-}
-
-void mixer_ch_play_ctx(int ch, waveform_t *wave, void *ctx) {
+static void mixer_ch_play_internal(int ch, waveform_t *wave, void *ctx, bool channel_specific_context)
+{
 	assert(ch < Mixer.num_channels);
 	samplebuffer_t *sbuf = &Mixer.ch_buf[ch];
 	mixer_channel_t *c = &Mixer.channels[ch];
@@ -419,7 +416,7 @@ void mixer_ch_play_ctx(int ch, waveform_t *wave, void *ctx) {
 	//    state of the callback is also different (eg: compression state),
 	//    so the next (not already buffered) sample could cause
 	//    an error because it'd be decompressed with the wrong state.
-	if (wave->__uuid != c->wave_uuid || ctx != sbuf->wv_ctx) {
+	if (wave->__uuid != c->wave_uuid || channel_specific_context) {
 		samplebuffer_flush(sbuf);
 
 		// If this channel is playing something else, stop it
@@ -442,7 +439,9 @@ void mixer_ch_play_ctx(int ch, waveform_t *wave, void *ctx) {
 		c->loop_len = MIXER_FX64((int64_t)wave->loop_len) << bps;
 		mixer_ch_set_freq(ch, wave->frequency);
 
-		tracef("mixer_ch_play: ch=%d len=%llx loop_len=%llx wave=%s\n", ch, c->len >> (MIXER_FX64_FRAC+bps), c->loop_len >> (MIXER_FX64_FRAC+bps), wave->name);
+		tracef("mixer_ch_play[new]: ch=%d len=%llx loop_len=%llx wave=%s ctx=%p\n", ch, c->len >> (MIXER_FX64_FRAC+SAMPLES_BPS_SHIFT(sbuf)), c->loop_len >> (MIXER_FX64_FRAC+SAMPLES_BPS_SHIFT(sbuf)), wave->name, ctx);
+	} else {
+		tracef("mixer_ch_play[old]: ch=%d len=%llx loop_len=%llx wave=%s ctx=%p\n", ch, c->len >> (MIXER_FX64_FRAC+SAMPLES_BPS_SHIFT(sbuf)), c->loop_len >> (MIXER_FX64_FRAC+SAMPLES_BPS_SHIFT(sbuf)), wave->name, ctx);
 	}
 
 	// Restart from the beginning of the waveform
@@ -463,6 +462,17 @@ void mixer_ch_play_ctx(int ch, waveform_t *wave, void *ctx) {
 	}
 }
 
+void mixer_ch_play(int ch, waveform_t *wave)
+{
+	mixer_ch_play_internal(ch, wave, wave->ctx, false);
+}
+
+void mixer_ch_play_ctx(int ch, waveform_t *wave, void *ctx)
+{
+	mixer_ch_play_internal(ch, wave, ctx, true);
+}
+
+
 void mixer_ch_set_pos(int ch, float pos) {
 	mixer_channel_t *c = &Mixer.channels[ch];
 	assertf(!(c->flags & CH_FLAGS_STEREO_SUB), "mixer_ch_set_pos: cannot call on secondary stereo channel %d", ch);
@@ -479,6 +489,8 @@ float mixer_ch_get_pos(int ch) {
 void mixer_ch_stop(int ch) {
 	mixer_channel_t *c = &Mixer.channels[ch];
 	samplebuffer_t *sbuf = &Mixer.ch_buf[ch];
+
+	tracef("mixer_ch_stop: ch=%d ctx=%p/%p\n", ch, c->ctx, sbuf->wv_ctx);
 
 	if (c->flags & CH_FLAGS_STEREO)
 		c[1].flags &= ~CH_FLAGS_STEREO_SUB;

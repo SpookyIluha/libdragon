@@ -265,7 +265,7 @@ void wav64_play(wav64_t *wav, int ch)
 {
 	if (wav->st->nsimul == 0) {
 		// Infinite simultaneous playbacks, no need to track anything
-		mixer_ch_play_ctx(ch, &wav->wave, NULL);
+		mixer_ch_play(ch, &wav->wave);
 		return;
 	}
 
@@ -291,8 +291,8 @@ void wav64_play(wav64_t *wav, int ch)
 		assert(wav->st->mixer_channels[chidx] < 0);
 	}
 
-	wav->st->mixer_channels[chidx] = ch;
 	mixer_ch_play_ctx(ch, &wav->wave, (void*)chidx);
+	wav->st->mixer_channels[chidx] = ch;
 }
 
 void wav64_set_loop(wav64_t *wav, bool loop) {
