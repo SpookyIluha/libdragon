@@ -123,6 +123,10 @@ int huffv_compress(uint8_t *input_data, int data_len, uint8_t *output, int outpu
     HuffCtx ctx[HUFF_CONTEXTS] = {0};
     for (int i = 0; i < HUFF_CONTEXTS; i++) {
         while (1) {
+            // Initialize codes with invalid length so we can detect if we can't encode this context
+            for (int j = 0; j < HUFF_TABLE_SIZE; j++) {
+                ctx[i].codes[j].length = -1;
+            }
 
             ctx[i].root = build_huffman_tree(freq.freq[i], HUFF_TABLE_SIZE);
             generate_huffman_codes(ctx[i].root, 0, 0, ctx[i].codes);
@@ -158,8 +162,13 @@ int huffv_compress(uint8_t *input_data, int data_len, uint8_t *output, int outpu
             int l = 0;
             assert(ctx[i].codes[j+0].length < 16);
             assert(ctx[i].codes[j+1].length < 16);
-            l |= ctx[i].codes[j+0].length << 4;
-            l |= ctx[i].codes[j+1].length;
+            // Negative lengths (unused symbols) are encoded
+            // as 0xF. Notice that 0 length is a valid length
+            // (only one symbol in the context).
+            int l0 = ctx[i].codes[j+0].length < 0 ? 0xF : ctx[i].codes[j+0].length;
+            int l1 = ctx[i].codes[j+1].length < 0 ? 0xF : ctx[i].codes[j+1].length;
+            l |= l0 << 4;
+            l |= l1 << 0;
             assert(outctxlen-- > 0);
             *outctx++ = l;
         }
@@ -184,8 +193,10 @@ int huffv_compress(uint8_t *input_data, int data_len, uint8_t *output, int outpu
             int c0 = (i+0 < 2) ? i+0 : 2;
             int c1 = (i+1 < 2) ? i+1 : 2;
 
-            assert(ctx[c0].codes[sym0].length > 0);
-            assert(ctx[c1].codes[sym1].length > 0);
+            // 0-lengths happen when a context only has a single symbol, so
+            // there's no need to encode it.
+            assert(ctx[c0].codes[sym0].length >= 0);
+            assert(ctx[c1].codes[sym1].length >= 0);
 
             buffer = (buffer << ctx[c0].codes[sym0].length) | ctx[c0].codes[sym0].value;
             bit_pos += ctx[c0].codes[sym0].length;

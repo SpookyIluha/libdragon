@@ -10,7 +10,7 @@ typedef struct __attribute__((aligned(8))) {
 
 /** @brief Huffamn decoding context */
 typedef struct {
-	uint8_t lengths[8];					///< Length of each symbol (4-bit)
+	uint8_t lengths[8];					///< Length of each symbol (4-bit - 0xF means unused)
 	uint8_t values[16];					///< Code used for each symbol
 } wav64_vadpcm_huffctx_t;
 

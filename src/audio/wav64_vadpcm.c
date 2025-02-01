@@ -179,7 +179,7 @@ static void huffv_decompress(int nframe, wav64_t *wav, wav64_state_vadpcm_t *vst
             uint8_t code1 = tbl->codes[(buffer >> (buffer_bits - 8)) & 0xFF];
             int len1 = code1 & 0xF;
             int val1 = code1 >> 4;
-            assert(len1 != 0);
+            assert(len1 <= 8);
             buffer_bits -= len1;
             bitpos += len1;
             if (j == 0) tbl++;
@@ -187,7 +187,7 @@ static void huffv_decompress(int nframe, wav64_t *wav, wav64_state_vadpcm_t *vst
             uint8_t code2 = tbl->codes[(buffer >> (buffer_bits - 8)) & 0xFF];
             int len2 = code2 & 0xF;
             int val2 = code2 >> 4;
-            assert(len2 != 0);
+            assert(len2 <= 8);
             buffer_bits -= len2;
             bitpos += len2;
             if (j == 0) tbl++;
@@ -350,7 +350,7 @@ static void wav64_vadpcm_init_huffman(wav64_t *wav) {
     for (int i = 0; i < 3; i++) {
         for (int j=0; j<16; j++) {
             int len = ctx[i].lengths[j/2] >> (4*(~j&1)) & 0xf;
-            if (len == 0) continue;
+            if (len == 0xF) continue;
             assert(len <= 8);
             assert((ctx[i].values[j] >> len) == 0);
 
