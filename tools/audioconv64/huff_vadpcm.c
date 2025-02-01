@@ -115,13 +115,38 @@ void calculate_frequencies(uint8_t *input_data, int data_len, HuffFreq *freq) {
 }
 
 int huffv_compress(uint8_t *input_data, int data_len, uint8_t *output, int output_len, uint8_t *outctx, int outctxlen) {
+    assert(data_len > 0);
+
     HuffFreq freq;
     calculate_frequencies(input_data, data_len, &freq);
 
     HuffCtx ctx[HUFF_CONTEXTS] = {0};
     for (int i = 0; i < HUFF_CONTEXTS; i++) {
-        ctx[i].root = build_huffman_tree(freq.freq[i], HUFF_TABLE_SIZE);
-        generate_huffman_codes(ctx[i].root, 0, 0, ctx[i].codes);
+        while (1) {
+
+            ctx[i].root = build_huffman_tree(freq.freq[i], HUFF_TABLE_SIZE);
+            generate_huffman_codes(ctx[i].root, 0, 0, ctx[i].codes);
+
+            // Check if all codes are 8 bits or less, otherwise we can't encode this context
+            // We limit the maximum code length to 8 bits so that the decompressor
+            // can use a compact table to decode.
+            bool valid = true;
+            for (int j = 0; j < HUFF_TABLE_SIZE; j++) {
+                if (ctx[i].codes[j].length > 8) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid) break;
+            free_huffman_tree(ctx[i].root);
+
+            // Scale the frequencies and retry. This is what bzip2 does. It's not
+            // the best solution but it's simple and works.
+            for (int j = 0; j < HUFF_TABLE_SIZE; j++) {
+                if (freq.freq[i][j] > 1)
+                    freq.freq[i][j] /= 2;
+            }
+        }
     }
 
     int written = 0;
