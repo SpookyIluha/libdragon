@@ -218,7 +218,7 @@ void test_rdpq_dynamic(TestContext *ctx)
             expected_fb[y * WIDTH + x + 2] = color_to_packed16(c);
             expected_fb[y * WIDTH + x + 3] = color_to_packed16(c);
             rdpq_set_fill_color(c);
-            rdpq_set_scissor(x, y, x + 4, y + 1);
+            rdpq_set_scissor(x, y, x + 4, y + 1, display_get_rdpinterlace(), display_get_rdpfield());
             rdpq_fill_rectangle(0, 0, WIDTH, WIDTH);
         }
     }
@@ -285,7 +285,7 @@ void test_rdpq_block(TestContext *ctx)
             expected_fb[y * WIDTH + x + 2] = color_to_packed16(c);
             expected_fb[y * WIDTH + x + 3] = color_to_packed16(c);
             rdpq_set_fill_color(c);
-            rdpq_set_scissor(x, y, x + 4, y + 1);
+            rdpq_set_scissor(x, y, x + 4, y + 1, display_get_rdpinterlace(), display_get_rdpfield());
             rdpq_fill_rectangle(0, 0, WIDTH, WIDTH);
         }
     }
@@ -629,7 +629,7 @@ void test_rdpq_fixup_setscissor(TestContext *ctx)
     rdpq_debug_log_msg("Fill mode");
     surface_clear(&fb, 0);
     rdpq_set_mode_fill(TEST_COLOR);
-    rdpq_set_scissor(4, 4, WIDTH-4, WIDTH-4);
+    rdpq_set_scissor(4, 4, WIDTH-4, WIDTH-4, display_get_rdpinterlace(), display_get_rdpfield());
     rdpq_fill_rectangle(0, 0, WIDTH, WIDTH);
     rspq_wait();
     ASSERT_EQUAL_MEM((uint8_t*)fb.buffer, (uint8_t*)expected_fb, WIDTH*WIDTH*2, 
@@ -641,7 +641,7 @@ void test_rdpq_fixup_setscissor(TestContext *ctx)
     rdpq_mode_combiner(RDPQ_COMBINER1((ZERO,ZERO,ZERO,ZERO),(ZERO,ZERO,ZERO,ONE)));
     rdpq_mode_blender(RDPQ_BLENDER((BLEND_RGB, IN_ALPHA, IN_RGB, INV_MUX_ALPHA)));
     rdpq_set_blend_color(TEST_COLOR);
-    rdpq_set_scissor(4, 4, WIDTH-4, WIDTH-4);
+    rdpq_set_scissor(4, 4, WIDTH-4, WIDTH-4, display_get_rdpinterlace(), display_get_rdpfield());
     rdpq_fill_rectangle(0, 0, WIDTH, WIDTH);
     rspq_wait();
     ASSERT_EQUAL_MEM((uint8_t*)fb.buffer, (uint8_t*)expected_fb, WIDTH*WIDTH*2, 
@@ -649,7 +649,7 @@ void test_rdpq_fixup_setscissor(TestContext *ctx)
 
     rdpq_debug_log_msg("Fill mode (update)");
     surface_clear(&fb, 0);
-    rdpq_set_scissor(4, 4, WIDTH-4, WIDTH-4);
+    rdpq_set_scissor(4, 4, WIDTH-4, WIDTH-4, display_get_rdpinterlace(), display_get_rdpfield());
     rdpq_set_other_modes_raw(SOM_CYCLE_FILL);
     rdpq_set_fill_color(TEST_COLOR);
     rdpq_fill_rectangle(0, 0, WIDTH, WIDTH);
@@ -659,7 +659,7 @@ void test_rdpq_fixup_setscissor(TestContext *ctx)
 
     rdpq_debug_log_msg("1-cycle mode (update)");
     surface_clear(&fb, 0);
-    rdpq_set_scissor(4, 4, WIDTH-4, WIDTH-4);
+    rdpq_set_scissor(4, 4, WIDTH-4, WIDTH-4, display_get_rdpinterlace(), display_get_rdpfield());
     rdpq_set_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER1((ZERO,ZERO,ZERO,ZERO),(ZERO,ZERO,ZERO,ONE)));
     rdpq_mode_blender(RDPQ_BLENDER((BLEND_RGB, IN_ALPHA, IN_RGB, INV_MUX_ALPHA)));
@@ -1142,7 +1142,7 @@ static void __autosync_pipe1(void) {
     // NO PIPESYNC HERE
     rdpq_set_prim_depth_raw(0, 1);
     // NO PIPESYNC HERE
-    rdpq_set_scissor(0,0,1,1);
+    rdpq_set_scissor(0,0,1,1, display_get_rdpinterlace(), display_get_rdpfield());
     rdpq_fill_rectangle(0, 0, 8, 8);
 }
 static uint8_t __autosync_pipe1_exp[4] = {0,0,1,1};

@@ -52,6 +52,8 @@ typedef enum {
     INTERLACE_HALF,
     /** @brief Video output is interlaced and buffer is swapped only on even fields */
     INTERLACE_FULL,
+    /** @brief Video output is interlaced and rdp is interlaced too, the buffer is swapped partially only when rdp has drawn the field buffer */
+    INTERLACE_480I_SPECIAL
 } interlace_mode_t;
 
 /**
@@ -387,6 +389,13 @@ void display_set_fps_limit(float fps);
  * @brief Returns a surface that points to the framebuffer currently being shown on screen.
  */
 surface_t display_get_current_framebuffer(void);
+
+extern volatile bool __rdpinterlace;
+extern volatile bool __rdpfield;
+
+bool display_get_rdpinterlace();
+
+bool display_get_rdpfield();
 
 /** @cond */
 __attribute__((deprecated("use display_get or display_try_get instead")))
