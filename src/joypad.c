@@ -32,6 +32,27 @@
     assertf(joypad_init_refcount > 0, "joypad_init() was not called")
 
 /**
+ * @brief BBPlayer "Hack Flags" register value.
+ *
+ * The only known purpose of this register is to hold the iQue menu configuration
+ * setting for swapping the first controller with another port.
+ *
+ * The value of the register is the controller to swap with (0-indexed).
+ */
+#define BB_HACK_FLAGS_SWAP_PORT1 ((*(uint32_t *)0x8000038c) & 3)
+
+/** @brief Respect BBPlayer "Hack Flags" register for a given port. */
+static joypad_port_t bb_hack_flags_swap_port( joypad_port_t port )
+{
+    if (sys_bbplayer())
+    {
+        if (port == JOYPAD_PORT_1) return BB_HACK_FLAGS_SWAP_PORT1;
+        if (port == BB_HACK_FLAGS_SWAP_PORT1) return JOYPAD_PORT_1;
+    }
+    return port;
+}
+
+/**
  * @anchor joypad_hot_state
  * @name "Hot" (interrupt-driven) global state
  * @{
@@ -92,17 +113,68 @@ static joypad_device_cold_t joypad_devices_cold[JOYPAD_PORT_COUNT] = {0};
  */
 static void joypad_device_changed(joypad_port_t port, joybus_identifier_t identifier)
 {
-    timer_link_t *timer = joypad_accessories_hot[port].transfer_pak_wait_timer;
-    if (timer) { stop_timer(timer); }
-
     joypad_identifiers_hot[port] = identifier;
     joypad_origins_hot[port] = JOYPAD_GCN_ORIGIN_INIT;
     memset((void *)&joypad_devices_cold[port], 0, sizeof(joypad_devices_cold[port]));
     memset((void *)&joypad_devices_hot[port], 0, sizeof(joypad_devices_hot[port]));
-    memset((void *)&joypad_accessories_hot[port], 0, sizeof(joypad_accessories_hot[port]));
+    joypad_accessory_reset(port);
+}
 
-    // Restore the timer pointer on the cleared accessory
-    joypad_accessories_hot[port].transfer_pak_wait_timer = timer;
+static void joybus_input_identify( uint8_t input[JOYBUS_BLOCK_SIZE], bool reset )
+{
+    const joybus_cmd_identify_port_t cmd = { .send = {
+        .command = reset ? JOYBUS_COMMAND_ID_RESET : JOYBUS_COMMAND_ID_IDENTIFY,
+    } };
+    const size_t recv_offset = offsetof(typeof(cmd), recv);
+    size_t i = 0;
+
+    // Populate the Joybus commands on each port
+    memset(input, 0x00, JOYBUS_BLOCK_SIZE);
+    JOYPAD_PORT_FOREACH (port)
+    {
+        // iQue PIF requires a NOP (0xFF) before each command
+        if (sys_bbplayer()) input[i++] = 0xFF;
+        // Set the command metadata
+        input[i++] = sizeof(cmd.send);
+        input[i++] = sizeof(cmd.recv);
+        // Micro-optimization: Minimize copy length
+        memcpy(&input[i], &cmd, recv_offset);
+        i += sizeof(cmd);
+        // iQue PIF requires commands to be 8-byte aligned
+        if (sys_bbplayer()) while (i & 7) input[i++] = 0xFF;
+    }
+
+    // Close out the Joybus operation block
+    input[i] = 0xFE;
+    input[JOYBUS_BLOCK_SIZE - 1] = 0x01;
+}
+
+static void joybus_input_read_n64_controllers( uint8_t input[JOYBUS_BLOCK_SIZE] )
+{
+    const joybus_cmd_n64_controller_read_port_t cmd = { .send = {
+        .command = JOYBUS_COMMAND_ID_N64_CONTROLLER_READ,
+    } };
+    const size_t recv_offset = offsetof(typeof(cmd), recv);
+    size_t i = 0;
+    // Populate the Joybus commands on each port
+    memset(input, 0x00, JOYBUS_BLOCK_SIZE);
+    // iQue requires all four controllers to be polled even if disconnected
+    JOYPAD_PORT_FOREACH (port)
+    {
+        // iQue PIF requires a NOP (0xFF) before each command
+        if (sys_bbplayer()) input[i++] = 0xFF;
+        // Set the command metadata
+        input[i++] = sizeof(cmd.send);
+        input[i++] = sizeof(cmd.recv);
+        // Micro-optimization: Minimize copy length
+        memcpy(&input[i], &cmd, recv_offset);
+        i += sizeof(cmd);
+        // iQue PIF requires commands to be 8-byte aligned
+        if (sys_bbplayer()) while (i & 7) input[i++] = 0xFF;
+    }
+    // Close out the Joybus operation block
+    input[i] = 0xFE;
+    input[JOYBUS_BLOCK_SIZE - 1] = 0x01;
 }
 
 /**
@@ -418,6 +490,9 @@ static void joypad_identify_callback(uint64_t *out_dwords, void *ctx)
  */
 static void joypad_identify_async(bool reset)
 {
+    // Async operations are disabled during reset
+    if( exception_reset_time() > 0 ) { return; }
+
     // Bail if this operation is already in-progress
     if (joypad_identify_pending) { return; }
     joypad_identify_pending = true;
@@ -426,32 +501,7 @@ static void joypad_identify_async(bool reset)
     // Reset invalidates the cached input block
     if (!joypad_identify_input_valid || reset)
     {
-        const joybus_cmd_identify_port_t cmd = { .send = {
-            .command = reset ? JOYBUS_COMMAND_ID_RESET : JOYBUS_COMMAND_ID_IDENTIFY,
-        } };
-        const size_t recv_offset = offsetof(typeof(cmd), recv);
-        size_t i = 0;
-
-        // Populate the Joybus commands on each port
-        memset(input, 0, JOYBUS_BLOCK_SIZE);
-        JOYPAD_PORT_FOREACH (port)
-        {
-            // iQue has a very lousy PIF emulator that requires identification
-            // commands to be prepended by a nop (0xff) or they are not recognized.
-            if (sys_bbplayer()) input[i++] = 0xff;
-            // Set the command metadata
-            input[i++] = sizeof(cmd.send);
-            input[i++] = sizeof(cmd.recv);
-            // Micro-optimization: Minimize copy length
-            memcpy(&input[i], &cmd, recv_offset);
-            i += sizeof(cmd);
-            if (sys_bbplayer()) while (i & 7) input[i++] = 0xff;
-        }
-
-        // Close out the Joybus operation block
-        input[i] = 0xFE;
-        input[JOYBUS_BLOCK_SIZE - 1] = 0x01;
-
+        joybus_input_identify(input, reset);
         // Identify is more common than reset, so don't cache resets
         joypad_identify_input_valid = !reset;
     }
@@ -469,6 +519,10 @@ static void joypad_read_callback(uint64_t *out_dwords, void *ctx)
 {
     memcpy((void *)joypad_read_output, out_dwords, JOYBUS_BLOCK_SIZE);
     joypad_read_pending = false;
+
+    // Use some bytes from the joypad inputs to feed the entropy pool
+    extern void __entropy_add(uint64_t);
+    __entropy_add(out_dwords[0]);
 }
 
 /**
@@ -476,11 +530,19 @@ static void joypad_read_callback(uint64_t *out_dwords, void *ctx)
  */
 static void joypad_read_async(void)
 {
+    // Async operations are disabled during reset
+    if( exception_reset_time() > 0 ) { return; }
+
     // Bail if this operation is already in-progress
     if (joypad_read_pending) { return; }
     joypad_read_pending = true;
 
     uint8_t * const input = (void *)joypad_read_input;
+    if (!joypad_read_input_valid && sys_bbplayer())
+    {
+        joybus_input_read_n64_controllers(input);
+        joypad_read_input_valid = true;
+    }
     if (!joypad_read_input_valid)
     {
         volatile joypad_device_hot_t *device;
@@ -512,16 +574,12 @@ static void joypad_read_async(void)
             }
             else if (
                 identifier == JOYBUS_IDENTIFIER_N64_CONTROLLER ||
-                identifier == JOYBUS_IDENTIFIER_N64_MOUSE ||
-                sys_bbplayer() // on iQue, we must always poll the 4 controllers even if disconnected
+                identifier == JOYBUS_IDENTIFIER_N64_MOUSE
             )
             {
                 const joybus_cmd_n64_controller_read_port_t cmd = { .send = {
                     .command = JOYBUS_COMMAND_ID_N64_CONTROLLER_READ,
                 } };
-                // iQue has a very lousy PIF emulator that requires commands
-                // to be prepended by a nop (0xff) or they are not recognized.
-                if (sys_bbplayer()) input[i++] = 0xff;
                 // Set the command metadata
                 input[i++] = sizeof(cmd.send);
                 input[i++] = sizeof(cmd.recv);
@@ -529,7 +587,6 @@ static void joypad_read_async(void)
                 const size_t recv_offset = offsetof(typeof(cmd), recv);
                 memcpy(&input[i], &cmd, recv_offset);
                 i += sizeof(cmd);
-                if (sys_bbplayer()) while (i & 7) input[i++] = 0xff;
             }
             else
             {
@@ -562,11 +619,51 @@ static void joypad_vi_interrupt_callback(void)
 }
 
 /**
+ * @brief Callback for NMI/Reset interrupt to stop rumble motors.
+ */
+static void joypad_reset_interrupt_callback(void)
+{
+    // BBPlayer does not support rumble
+    if( sys_bbplayer() ) return;
+
+    const joybus_cmd_n64_accessory_write_port_t n64_motor_cmd = { .send = {
+        .command = JOYBUS_COMMAND_ID_N64_ACCESSORY_WRITE,
+        .addr_checksum = joybus_accessory_calculate_addr_checksum(JOYBUS_ACCESSORY_ADDR_RUMBLE_MOTOR),
+        .data = { 0 },
+    } };
+
+    const joybus_cmd_gcn_controller_read_port_t gcn_motor_cmd = { .send = {
+        .command = JOYBUS_COMMAND_ID_GCN_CONTROLLER_READ,
+        .mode = 3,
+        .rumble = false,
+    } };
+
+    JOYPAD_PORT_FOREACH (port)
+    {
+        if( !joypad_get_rumble_supported(port) ) continue;
+        switch( joypad_get_style(port) )
+        {
+            case JOYPAD_STYLE_N64:
+                joybus_exec_cmd_struct(port, n64_motor_cmd);
+                break;
+            case JOYPAD_STYLE_GCN:
+                joybus_exec_cmd_struct(port, gcn_motor_cmd);
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+/**
  * @brief Re-identify and reset all Joypads and wait for completion.
  */
 static void joypad_reset(void)
 {
     ASSERT_JOYPAD_INITIALIZED();
+    // Async operations are disabled during reset
+    if( exception_reset_time() > 0 ) { return; }
+
     // Wait for pending identify/reset operation to resolve
     while (joypad_identify_pending) { /* Spinlock */ }
     // Enqueue this identify/reset operation
@@ -583,6 +680,9 @@ static void joypad_reset(void)
 static void joypad_read(void)
 {
     ASSERT_JOYPAD_INITIALIZED();
+    // Async operations are disabled during reset
+    if( exception_reset_time() > 0 ) { return; }
+
     joypad_read_async();
     while (joypad_read_pending) { /* Spinlock */ }
     joypad_poll();
@@ -590,13 +690,28 @@ static void joypad_read(void)
 
 joypad_inputs_t joypad_read_n64_inputs(joypad_port_t port)
 {
+    ASSERT_JOYPAD_PORT_VALID(port);
+    // iQue PIF requires that all 4 controllers are read, even if disconnected.
+    if (sys_bbplayer())
+    {
+        // Respect the BBPlayer "Hack Flags" register
+        port = bb_hack_flags_swap_port(port);
+        uint8_t input[JOYBUS_BLOCK_SIZE], output[JOYBUS_BLOCK_SIZE];
+        joybus_input_read_n64_controllers(input);
+        joybus_exec( input, output );
 
-    joybus_cmd_n64_controller_read_port_t cmd = { .send = {
-        .command = JOYBUS_COMMAND_ID_N64_CONTROLLER_READ,
-    } };
-    joybus_exec_cmd_struct(port, cmd);
-
-    return joypad_inputs_from_n64_controller_read(&cmd);
+        const joybus_cmd_n64_controller_read_port_t *cmd;
+        cmd = (void *)&output[(port * 8) + 1 + JOYBUS_COMMAND_METADATA_SIZE];
+        return joypad_inputs_from_n64_controller_read(cmd);
+    }
+    else
+    {
+        const joybus_cmd_n64_controller_read_port_t cmd = { .send = {
+            .command = JOYBUS_COMMAND_ID_N64_CONTROLLER_READ,
+        } };
+        joybus_exec_cmd_struct(port, cmd);
+        return joypad_inputs_from_n64_controller_read(&cmd);
+    }
 }
 
 void joypad_init(void)
@@ -619,6 +734,8 @@ void joypad_init(void)
 
     // Update the Joypads on VI interrupt
     register_VI_handler(joypad_vi_interrupt_callback);
+    // Stop rumble on console reset
+    register_RESET_handler(joypad_reset_interrupt_callback);
 }
 
 void joypad_close(void)
@@ -628,7 +745,8 @@ void joypad_close(void)
 
     // Stop updating the Joypads on VI interrupt
     unregister_VI_handler(joypad_vi_interrupt_callback);
-    
+    unregister_RESET_handler(joypad_reset_interrupt_callback);
+
     // Decrement the timer subsystem refcount (possibly closing it)
     timer_close();
 }
@@ -636,6 +754,8 @@ void joypad_close(void)
 void joypad_poll(void)
 {
     ASSERT_JOYPAD_INITIALIZED();
+    // Controller inputs are disabled during reset
+    if( exception_reset_time() > 0 ) { return; }
 
     uint8_t output[JOYBUS_BLOCK_SIZE];
     joypad_gcn_origin_t origins[JOYPAD_PORT_COUNT];
@@ -659,8 +779,9 @@ void joypad_poll(void)
         if (sys_bbplayer()) {
             // iQue has a very fixed layout for commands, and it also tends
             // to corrupt other parts of PIF-RAM. So better jump to fixed positions
-            // while parsing.
-            i = (port * 8) + 1;
+            // while parsing. Also, respect the BBPlayer "Hack Flags" register for
+            // swapping the first controller with another port.
+            i = (bb_hack_flags_swap_port(port) * 8) + 1;
         }
         device = &joypad_devices_cold[port];
         // Check send_len to figure out if this port has a command on it
@@ -724,6 +845,8 @@ void joypad_poll(void)
             memset(device, 0, sizeof(*device));
             i += command_len;
         }
+        // Copy the hot identifier to the cold device state
+        device->identifier = identifiers[port];
     }
 
     if (check_origins) joypad_gcn_origin_check_async();
@@ -733,18 +856,18 @@ bool joypad_is_connected(joypad_port_t port)
 {
     ASSERT_JOYPAD_INITIALIZED();
     ASSERT_JOYPAD_PORT_VALID(port);
-    joybus_identifier_t identifier = joypad_identifiers_hot[port];
-    return (
-        identifier != JOYBUS_IDENTIFIER_NONE &&
-        identifier != JOYBUS_IDENTIFIER_UNKNOWN
-    );
+    switch( joypad_devices_cold[port].identifier ) {
+        case JOYBUS_IDENTIFIER_NONE:
+        case JOYBUS_IDENTIFIER_UNKNOWN: return false;
+        default:                        return true;
+    }
 }
 
 joybus_identifier_t joypad_get_identifier(joypad_port_t port)
 {
     ASSERT_JOYPAD_INITIALIZED();
     ASSERT_JOYPAD_PORT_VALID(port);
-    return joypad_identifiers_hot[port];
+    return joypad_devices_cold[port].identifier;
 }
 
 joypad_style_t joypad_get_style(joypad_port_t port)
@@ -800,6 +923,10 @@ void joypad_set_rumble_active(joypad_port_t port, bool active)
 {
     ASSERT_JOYPAD_INITIALIZED();
     ASSERT_JOYPAD_PORT_VALID(port);
+
+    // Rumble motor operations are disabled during reset
+    if( exception_reset_time() > 0 ) { return; }
+
     disable_interrupts();
     volatile joypad_device_hot_t *device = &joypad_devices_hot[port];
     joypad_rumble_method_t rumble_method = device->rumble_method;

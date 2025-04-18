@@ -18,6 +18,7 @@
 #include <time.h>
 #include "system.h"
 #include "n64sys.h"
+#include "rtc_internal.h"
 
 /**
  * @name STDIN/STDOUT/STDERR definitions from unistd.h
@@ -143,8 +144,10 @@ static int handle_open_count;
 static fs_mapping_t filesystems[MAX_FILESYSTEMS] = { { 0 } };
 /** @brief Current stdio hook structure */
 static stdio_t stdio_hooks = { 0 };
-/** @brief Function to provide the current time */
-time_t (*time_hook)( void ) = NULL;
+/** @brief Current time hooks structure */
+static time_hooks_t time_hooks = { 0 };
+/** @brief Current real-time clock hooks structure */
+static rtc_hooks_t rtc_hooks = { 0 };
 /** @brief Current entropy state */
 uint64_t __entropy_state = 0;
 /** @brief Entropy calculation constants (MurMurHash3-128)
@@ -749,14 +752,91 @@ int getpid( void )
  */
 int gettimeofday( struct timeval *ptimeval, void *ptimezone )
 {
-    if( time_hook != NULL )
+    time_t time;
+    if( time_hooks.gettime != NULL )
     {
-        time_t time = time_hook();
+        time = time_hooks.gettime();
         if( time != -1 )
         {
             ptimeval->tv_sec = time;
             ptimeval->tv_usec = 0;
             return 0;
+        }
+        errno = EIO;
+        return -2;
+    }
+
+    if( rtc_hooks.gettime != NULL )
+    {
+        switch( rtc_hooks.gettime( &time ) )
+        {
+            case RTC_ESUCCESS:
+                ptimeval->tv_sec = time;
+                ptimeval->tv_usec = 0;
+                return 0;
+            case RTC_ENOCLOCK:
+                errno = ENODEV;
+                return -2;
+            case RTC_EBADCLOCK:
+                errno = EIO;
+                return -2;
+            case RTC_EBADTIME:
+                errno = EBADMSG;
+                return -2;
+            default:
+                errno = ENOMSG;
+                return -1;
+        }
+    }
+
+    errno = ENOSYS;
+    return -1;
+}
+
+/**
+ * @brief Set the current time
+ *
+ * @param[out] ptimeval
+ *             Time structure containing the new current time.
+ * @param[out] ptimezone
+ *             Timezone information. (Not supported)
+ *
+ * @retval 0 Success
+ * @retval -1 Operation not available (errno is set)
+ * @retval -2 Operation failed (errno is set)
+ */
+int settimeofday( const struct timeval *ptimeval, const void *ptimezone )
+{
+    time_t time = ptimeval->tv_sec;
+    if( time_hooks.settime != NULL )
+    {
+        if( time_hooks.settime( time ) )
+        {
+            return 0;
+        }
+
+        errno = EIO;
+        return -2;
+    }
+
+    if( rtc_hooks.settime != NULL )
+    {
+        switch( rtc_hooks.settime( time ) )
+        {
+            case RTC_ESUCCESS:
+                return 0;
+            case RTC_ENOCLOCK:
+                errno = ENODEV;
+                return -2;
+            case RTC_EBADCLOCK:
+                errno = EIO;
+                return -2;
+            case RTC_EBADTIME:
+                errno = EINVAL;
+                return -2;
+            default:
+                errno = ENOMSG;
+                return -1;
         }
     }
 
@@ -1335,6 +1415,44 @@ int truncate( const char *path, off_t length )
 }
 
 /**
+ * @brief Add some non-deterministic data to the entropy pool.
+ * 
+ * This is an internal function that can be used by libdragon libraries to add
+ * some non-deterministic data to the entropy pool. One example of such data
+ * would be the joypad inputs at any given point.
+ * 
+ * The entropy pool is then used t
+ * 
+ * @param k         Non-deterministic data (up to 64 bits)
+ */
+void __entropy_add(uint64_t k) {
+    // This is half of MurMurHash3-128.
+    k *= __entropy_K[0];
+    k = k<<31 | k>>33;
+    k *= __entropy_K[1];
+    disable_interrupts();
+    __entropy_state ^= k;
+    __entropy_state = __entropy_state<<27 | __entropy_state>>37;
+    __entropy_state = __entropy_state * 5 + 0x52dce729;
+    enable_interrupts();
+}
+
+// Extract data from the entropy pool. This is kept here for symmetry with
+// __entropy_add, but it is not an API; the API to use to extract entropy is
+// #getentropy.
+static uint64_t __entropy_get(void) {
+    disable_interrupts();
+    uint64_t h = __entropy_state;
+    enable_interrupts();
+    h ^= h >> 33;
+    h *= __entropy_K[2];
+    h ^= h >> 33;
+    h *= __entropy_K[3];
+    h ^= h >> 33;
+    return h;
+}
+
+/**
  * @brief Generate an array of unpredictable random numbers
  * 
  * This function can be used to generate an array of random data. The function
@@ -1367,24 +1485,13 @@ int getentropy(uint8_t *buf, size_t buflen)
 
     // Mix in some hardware state / counters that are likely to be random
     // at the point of sampling, especially during hardware activity.
-    // This is half of MurMurHash3-128.
     for (int i=0; i<sizeof(entropic_regs)/sizeof(entropic_regs[0]); i+=2) {
         uint64_t k = ((uint64_t)*entropic_regs[i+0] << 32) | *entropic_regs[i+1];
-        k *= __entropy_K[0];
-        k = k<<31 | k>>33;
-        k *= __entropy_K[1];
-        __entropy_state ^= k;
-        __entropy_state = __entropy_state<<27 | __entropy_state>>37;
-        __entropy_state = __entropy_state * 5 + 0x52dce729;
+        __entropy_add(k);
     }
 
-    // Extract the current hash value
-    uint64_t h = __entropy_state;
-    h ^= h >> 33;
-    h *= __entropy_K[2];
-    h ^= h >> 33;
-    h *= __entropy_K[3];
-    h ^= h >> 33;
+    // Extract the current entropy value
+    uint64_t h = __entropy_get();
 
     // Generate output buffer
     typedef uint64_t u_uint64_t __attribute__((aligned(1)));
@@ -1517,26 +1624,60 @@ int unhook_stdio_calls( stdio_t *stdio_calls )
     return 0;
 }
 
-int hook_time_call( time_t (*time_fn)( void ) )
+int hook_rtc_calls( rtc_hooks_t *hooks )
 {
-    if( time_fn == NULL )
-    {
-        return -1;
-    }
+    if( hooks == NULL ) return -1;
 
-    time_hook = time_fn;
+    rtc_hooks.gettime = hooks->gettime;
+    rtc_hooks.settime = hooks->settime;
 
     return 0;
 }
 
-int unhook_time_call( time_t (*time_fn)( void ) )
+int unhook_rtc_calls( rtc_hooks_t *hooks )
 {
-    if( time_hook == time_fn )
-    {
-        time_hook = NULL;
-    }
+    if( hooks == NULL ) return -1;
+
+    if( rtc_hooks.gettime == hooks->gettime ) rtc_hooks.gettime = NULL;
+    if( rtc_hooks.settime == hooks->settime ) rtc_hooks.settime = NULL;
 
     return 0;
+}
+
+/** @deprecated Use #hook_rtc_calls instead. */
+int hook_time_calls( time_hooks_t *hooks )
+{
+    if( hooks == NULL ) return -1;
+
+    time_hooks.gettime = hooks->gettime;
+    time_hooks.settime = hooks->settime;
+
+    return 0;
+}
+
+/** @deprecated Use #unhook_rtc_calls instead. */
+int unhook_time_calls( time_hooks_t *hooks )
+{
+    if( hooks == NULL ) return -1;
+
+    if( time_hooks.gettime == hooks->gettime ) time_hooks.gettime = NULL;
+    if( time_hooks.settime == hooks->settime ) time_hooks.settime = NULL;
+
+    return 0;
+}
+
+/** @deprecated Use #hook_time_calls instead. */
+int hook_time_call( time_t (*time_fn)( void ) )
+{
+    time_hooks_t hooks = { time_fn, NULL };
+    return hook_time_calls( &hooks );
+}
+
+/** @deprecated Use #unhook_time_calls instead. */
+int unhook_time_call( time_t (*time_fn)( void ) )
+{
+    time_hooks_t hooks = { time_fn, NULL };
+    return unhook_time_calls( &hooks );
 }
 
 /**

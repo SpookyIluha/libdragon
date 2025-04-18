@@ -5,11 +5,9 @@
  */
 #include "fmath.h"
 #include "debug.h"
+#include "utils.h"
 #include <string.h>
 #include <stdint.h>
-
-/// Mark a branch as likely to be taken
-#define LIKELY(x)       __builtin_expect((x),1)
 
 static const float pi_hi            = 3.14159274e+00f; // 0x1.921fb6p+01
 static const float pi_lo            =-8.74227766e-08f; // -0x1.777a5cp-24
@@ -27,13 +25,14 @@ static float sinf_approx(float x, int approx) {
     s = x * x;
     // Execute only a portion of the series, depending on the approximation level.
     // This generate the most efficient code among similar approaches.
-    if (LIKELY(--approx < 0)) p +=   1.32729383e-10f, p *= s;
-    if (LIKELY(--approx < 0)) p += - 2.33177868e-8f,  p *= s;
-    if (LIKELY(--approx < 0)) p +=   2.52223435e-6f,  p *= s;
-    if (LIKELY(--approx < 0)) p += - 1.73503853e-4f,  p *= s;
-    if (LIKELY(--approx < 0)) p +=   6.62087463e-3f,  p *= s;
-    if (LIKELY(--approx < 0)) p += - 1.01321176e-1f;
-    return x * ((x - pi_hi) - pi_lo) * ((x + pi_hi) + pi_lo) * p;   
+    if (LIKELY(--approx < 0)) p +=   1.3291330536e-10f, p *= s;
+    if (LIKELY(--approx < 0)) p += - 2.3317808128e-8f,  p *= s;
+    if (LIKELY(--approx < 0)) p +=   2.5222900603e-6f,  p *= s;
+    if (LIKELY(--approx < 0)) p += - 1.7350520647e-4f,  p *= s;
+    if (LIKELY(--approx < 0)) p +=   6.6208802163e-3f,  p *= s;
+    if (LIKELY(--approx < 0)) p += - 1.0132116824e-1f;
+    x = x * ((x - pi_hi) - pi_lo) * ((x + pi_hi) + pi_lo) * p;
+    return x;
 }
 
 float fm_sinf_approx(float x, int approx) {
@@ -42,7 +41,8 @@ float fm_sinf_approx(float x, int approx) {
     // very accurate for large numbers, so it will introduce more error compared
     // to the 5 ULP figure.
     x = fm_fmodf(x+pi_hi, 2*pi_hi) - pi_hi;
-    return sinf_approx(x, approx);
+    x = sinf_approx(x, approx);
+    return x;
 }
 
 float fm_sinf(float x) {
@@ -92,3 +92,5 @@ float fm_wrap_angle(float angle)
     float a = fm_fmodf(angle, FM_PI*2);
     return a < 0.0f ? a + FM_PI*2 : a;
 }
+
+extern inline float fm_lerp(float a, float b, float t);

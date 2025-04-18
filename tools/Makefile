@@ -6,6 +6,8 @@ C_CXX_FLAGS += -I../include -MMD
 C_CXX_FLAGS += -fdiagnostics-color=always
 C_CXX_FLAGS += -Wno-unused-result -Wno-error=unknown-pragmas -Wno-sign-compare
 
+LDFLAGS += -pthread
+
 CFLAGS   += -std=gnu11 $(C_CXX_FLAGS) 
 CXXFLAGS += -std=gnu++17 $(C_CXX_FLAGS) 
 CXXFLAGS += -Wno-c++11-narrowing -Wno-narrowing -Wno-error=conversion-null
@@ -15,6 +17,10 @@ ifeq ($(OS),Windows_NT)
 	CXXFLAGS += -static
   	LDFLAGS += -static
 endif
+
+# Decomment to rebuild tools with ASAN
+#C_CXX_FLAGS += -O0 -g -fsanitize=address
+#LDFLAGS += -g -fsanitize=address
 
 all:
 
@@ -56,10 +62,11 @@ mkasset_OBJS = mkasset/mkasset.o common/assetcomp.a
 mksprite_OBJS = mksprite/mksprite.o common/assetcomp.a
 mkfont_OBJS = mkfont/mkfont.o mkfont/freetype/FreeTypeAmalgam.o common/assetcomp.a
 mkmodel_OBJS = mkmodel/mkmodel.o common/assetcomp.a
+combexpr_OBJS = mkmaterial/combexpr_cli.o mkmaterial/combexpr_disasm.o
 n64dso_OBJS = n64dso/n64dso.o common/assetcomp.a
 n64dso-extern_OBJS = n64dso/n64dso-extern.o
 n64dso-msym_OBJS = n64dso/n64dso-msym.o
-audioconv64_OBJS = audioconv64/audioconv64.o
+audioconv64_OBJS = audioconv64/audioconv64.o common/assetcomp.a
 rdpvalidate_OBJS = rdpvalidate/rdpvalidate.o
 mkdfs_OBJS = mkdfs/mkdfs.o
 dumpdfs_OBJS = dumpdfs/dumpdfs.o
@@ -69,7 +76,7 @@ ed64romconfig_OBJS = ed64romconfig.o
 n64elfcompress_OBJS = n64elfcompress/n64elfcompress.o common/assetcomp.a
 n64elfcompress/n64elfcompress.o: n64elfcompress/n64elfcompress.c $(DECOMP_STUBS)
 
-TOOLS = n64tool n64sym n64elfcompress ed64romconfig audioconv64 mkdfs dumpdfs mkasset mksprite mkfont mkmodel n64dso n64dso-msym n64dso-extern rdpvalidate
+TOOLS = n64tool n64sym n64elfcompress ed64romconfig audioconv64 mkdfs dumpdfs mkasset mksprite mkfont mkmodel n64dso n64dso-msym n64dso-extern rdpvalidate combexpr
 
 # Define a variable that has value ".exe" on Windows and "" on other platforms
 EXE = $(if $(findstring Windows,$(OS)),.exe,)

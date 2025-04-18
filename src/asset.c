@@ -202,36 +202,49 @@ static bool asset_read(int fd, asset_header_t *header, int *sz, void *buf, int *
             assertf(((uintptr_t)(buf) & (ASSET_ALIGNMENT_MIN-1)) == 0, "Asset buffer incorrectly aligned.");
             #endif
         }
-        lseek(fd, -((off_t)sizeof(asset_header_t)), SEEK_CUR);
+        // Seek back before the header. If the file is smaller than the header, we would
+        // seek to a negative position. Normally all our FS implementations simply
+        // clamp to 0, but this code is also compiled on PC, where the function
+        // can just fail returning -1 by the spec. In that case, we just seek
+        // to the beginning of the file.
+        if (lseek(fd, -((off_t)sizeof(asset_header_t)), SEEK_CUR) == -1 && errno == EINVAL)
+            lseek(fd, 0, SEEK_SET);
         read(fd, buf, *sz);
         return true;
     }
 }
 
-bool asset_loadf_into(FILE *f, int *sz, void *buf, int *buf_size)
+bool asset_loadfd_into(int fd, int *sz, void *buf, int *buf_size)
 {
-    int fd;
-    
-    fd = fileno(f);
-    fflush(f);
-    assertf(ftell(f) == lseek(fd, 0, SEEK_CUR), "Flushing has data remaining in buffer");
     asset_header_t header;
     asset_read_header(fd, &header, sz);
     return asset_read(fd, &header, sz, buf, buf_size);
 }
 
-void *asset_loadf(FILE *f, int *sz)
+bool asset_loadf_into(FILE *f, int *sz, void *buf, int *buf_size)
 {
-    void *buf = NULL; int buf_size = 0;
-    int fd;
-    fd = fileno(f);
+    int fd = fileno(f);
     fflush(f);
     assertf(ftell(f) == lseek(fd, 0, SEEK_CUR), "Flushing has data remaining in buffer");
+    return asset_loadfd_into(fd, sz, buf, buf_size);
+}
+
+void *asset_loadfd(int fd, int *sz)
+{
+    void *buf = NULL; int buf_size = 0;
     asset_header_t header;
     buf_size = asset_read_header(fd, &header, sz);
     buf = memalign(ASSET_ALIGNMENT, buf_size);
     asset_read(fd, &header, sz, buf, &buf_size);
     return buf;
+}
+
+void *asset_loadf(FILE *f, int *sz)
+{
+    int fd = fileno(f);
+    fflush(f);
+    assertf(ftell(f) == lseek(fd, 0, SEEK_CUR), "Flushing has data remaining in buffer");
+    return asset_loadfd(fd, sz);
 }
 
 void *asset_load(const char *fn, int *sz)
@@ -343,7 +356,11 @@ FILE *asset_fopen(const char *fn, int *sz)
     // Open the file. We use buffering on the outer file created by funopen,
     // so we don't actually need buffering on the underlying one.
     int fd = must_open(fn);
+    return asset_fdopen(fd, sz);
+}
 
+FILE *asset_fdopen(int fd, int *sz)
+{
     // Check if file is compressed
     asset_header_t header;
     read(fd, &header, sizeof(asset_header_t));
@@ -385,8 +402,9 @@ FILE *asset_fopen(const char *fn, int *sz)
 
     // Not compressed. Return a wrapped FILE* without the seeking capability,
     // so that it matches the behavior of the compressed file.
+    int pos = lseek(fd, 0, SEEK_CUR);
     if (sz) *sz = lseek(fd, 0, SEEK_END);
-    lseek(fd, 0, SEEK_SET);
+    lseek(fd, pos - sizeof(asset_header_t), SEEK_SET);
     cookie_none_t *cookie = malloc(sizeof(cookie_none_t));
     cookie->fd = fd;
     cookie->seeked = false;

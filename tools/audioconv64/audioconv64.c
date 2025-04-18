@@ -9,6 +9,10 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 
+#include "../common/binout.c"
+#include "../common/binout.h"
+#include "../common/polyfill.h"
+
 bool flag_verbose = false;
 bool flag_debug = false;
 
@@ -39,6 +43,7 @@ void fatal(const char *str, ...) {
 	va_list va;
 	va_start(va, str);
 	vfprintf(stderr, str, va);
+	fprintf(stderr, "\n");
 	va_end(va);
 	exit(1);
 }
@@ -79,6 +84,10 @@ void usage(void) {
 	printf("   --wav-compress <0|1|3>    Enable compression: 0=none, 1=vadpcm (default), 3=opus\n");
 	printf("   --wav-loop <true|false>   Activate playback loop by default\n");
 	printf("   --wav-loop-offset <N>     Set looping offset (in samples; default: 0)\n");
+	printf("XM options:\n");
+	printf("   --xm-8bit                 Convert all samples ot 8-bit\n");
+	printf("   --xm-ext-samples <dir>    Export samples externally as wav64 files in the specified directory\n");
+	printf("   --xm-compress <0..3>      Compression level for XM metadata (default: 1)\n");
 	printf("\n");
 	printf("YM options:\n");
 	printf("   --ym-compress <true|false>  Compress output file\n");
@@ -144,11 +153,7 @@ void walkdir(char *inpath, char *outpath, void (*func)(char *, char*)) {
 				fprintf(stderr, "ERROR: %s is a file but should be a directory\n", outpath);
 				return;
 			}
-			#ifndef __MINGW32__
 			mkdir(outpath, 0777);
-			#else
-			mkdir(outpath);
-			#endif
 		}
 		DIR* d = opendir(inpath);
 		struct dirent *de;
@@ -236,10 +241,59 @@ int main(int argc, char *argv[]) {
 					fprintf(stderr, "missing argument for --wav-compress\n");
 					return 1;
 				}
-				flag_wav_compress = atoi(argv[i]);
-				if (flag_wav_compress != 0 && flag_wav_compress != 1 && flag_wav_compress != 3) {
+				char *opts = strchr(argv[i], ',');
+				if (opts) *opts++ = '\0';
+				if (!strcmp(argv[i], "0") || !strcmp(argv[i], "none"))
+					flag_wav_compress = 0;
+				else if (!strcmp(argv[i], "1") || !strcmp(argv[i], "vadpcm"))
+					flag_wav_compress = 1;
+				else if (!strcmp(argv[i], "3") || !strcmp(argv[i], "opus"))
+					flag_wav_compress = 3;
+				else {
 					fprintf(stderr, "invalid argument for --wav-compress: %s\n", argv[i]);
 					return 1;
+				}
+				while (opts && *opts) {
+					char *key = opts;
+					char *value = strchr(opts, '=');
+					if (!value) {
+						fprintf(stderr, "invalid option for --wav-compress: %s\n", opts);
+						return 1;
+					}
+					*value = '\0';
+					value++;
+					opts = strchr(value, ',');
+					if (opts) {
+						*opts = '\0';
+						opts++;
+					}
+					if (!strcmp(key, "huffman")) {
+						if (flag_wav_compress != 1) {
+							fprintf(stderr, "compression option 'huffman' only allowed for VADPCM (--wav-compress 1)\n");
+							return 1;
+						}
+						if (!strcmp(value, "true") || !strcmp(value, "1"))
+							flag_wav_compress_vadpcm_huffman = true;
+						else if (!strcmp(value, "false") || !strcmp(value, "0"))
+							flag_wav_compress_vadpcm_huffman = false;
+						else {
+							fprintf(stderr, "invalid value for compression option 'huffman': %s\n", value);
+							return 1;
+						}
+					} else if (!strcmp(key, "bits")) {
+						if (flag_wav_compress != 1) {
+							fprintf(stderr, "compression option 'bits' only allowed for VADPCM (--wav-compress 1)\n");
+							return 1;
+						}
+						flag_wav_compress_vadpcm_bits = atoi(value);
+						if (flag_wav_compress_vadpcm_bits < 2 || flag_wav_compress_vadpcm_bits > 4) {
+							fprintf(stderr, "invalid value for compression option 'bits': %s\n", value);
+							return 1;
+						}
+					} else {
+						fprintf(stderr, "invalid option for --wav-compress: %s\n", key);
+						return 1;
+					}
 				}
 			} else if (!strcmp(argv[i], "--wav-resample")) {
 				if (++i == argc) {
@@ -249,6 +303,25 @@ int main(int argc, char *argv[]) {
 				flag_wav_resample = atoi(argv[i]);
 				if (flag_wav_resample < 1 || flag_wav_resample > 48000) {
 					fprintf(stderr, "invalid argument for --wav-resample: %s\n", argv[i]);
+					return 1;
+				}
+			} else if (!strcmp(argv[i], "--xm-8bit")) {
+				flag_xm_8bit = true;
+			} else if (!strcmp(argv[i], "--xm-ext-samples")) {
+				if (++i == argc) {
+					fprintf(stderr, "missing argument for --xm-ext-samples\n");
+					return 1;
+				}
+				flag_xm_extsampledir = argv[i];
+				mkdir(flag_xm_extsampledir, 0777);
+			} else if (!strcmp(argv[i], "--xm-compress")) {
+				if (++i == argc) {
+					fprintf(stderr, "missing argument for --xm-compress\n");
+					return 1;
+				}
+				flag_xm_compress_meta = atoi(argv[i]);
+				if (flag_xm_compress_meta < 0 || flag_xm_compress_meta > MAX_COMPRESSION) {
+					fprintf(stderr, "invalid argument for --xm-compress: %s\n", argv[i]);
 					return 1;
 				}
 			} else if (!strcmp(argv[i], "--ym-compress")) {

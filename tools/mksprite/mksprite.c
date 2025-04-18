@@ -176,8 +176,36 @@ void print_args( char * name )
 }
 
 uint16_t conv_rgb5551(uint8_t r8, uint8_t g8, uint8_t b8, uint8_t a8) {
-    uint16_t r=r8>>3, g=g8>>3, b=b8>>3, a=a8?1:0;
+    uint16_t r=r8>>3, g=g8>>3, b=b8>>3, a=a8 >= 128?1:0;
     return (r<<11) | (g<<6) | (b<<1) | a;
+}
+
+/*dither matrix*/
+unsigned int dith[4][4] = {{0, 6, 1, 7}, {4, 2, 5, 3}, {3, 5, 2, 4}, {7, 1, 6, 0}};
+
+int check_color(int val){
+    if(val > 255) val = 255;
+    if(val < 0) val = 0;
+    return val;
+}
+
+uint16_t conv_rgb5551_dither(uint8_t r8, uint8_t g8, uint8_t b8, uint8_t a8, unsigned int x, unsigned int y, int dither ) {
+    int value = 0;
+    switch(dither){
+        case DITHER_ALGO_ORDERED: value = dith[x & 0x3][y & 0x3]; break;
+        case DITHER_ALGO_RANDOM:  value = rand() & 0x7; break;
+        case DITHER_ALGO_NONE: return conv_rgb5551(r8, g8, b8, a8); break;
+        default: fprintf(stderr, "ERROR: conv RGBA5551 unimplemented dithering mode %s\n", dither_algo_name(dither)); assert(0);
+    }
+
+    int r = r8 + value - 4;
+    int g = g8 + value - 4;
+    int b = b8 + value - 4;
+    r = check_color(r);
+    g = check_color(g);
+    b = check_color(b);
+
+    return conv_rgb5551(r,g,b,a8);
 }
 
 // Convert a 18-bit fixed point 0.15.3 into floating point 14-bit.
@@ -227,8 +255,8 @@ typedef struct {
 #define MAX_IMAGES 8
 
 typedef struct {
-    const char *infn;       // Input file
-    const char *outfn;      // Output file
+    const char *infn;       // Input file name
+    FILE *out;              // Output file
     image_t images[MAX_IMAGES]; // Pixel images (one per lod level).
     palette_t palette;      // Palette (if any)
     int vslices;            // Number of vertical slices (deprecated API for old rdp.c)
@@ -242,6 +270,7 @@ typedef struct {
         bool         use_main_tex;  // If true, use the main texture as detail (fractal detail)
         bool         enabled;       // If true, detail texture is enabled
     } detail;
+    int ditheralgo;
 } spritemaker_t;
 
 
@@ -270,7 +299,7 @@ bool load_png_image(const char *infn, tex_format_t fmt, image_t *imgout, palette
     // Initialize lodepng and load the input file into memory (without decoding).
     lodepng_state_init(&state);
 
-    if (strcmp(infn, "(stdin)") != 0) {
+    if (!strstr(infn, "(stdin)")) {
         error = lodepng_load_file(&png, &pngsize, infn);
         if(error) {
             fprintf(stderr, "%s: PNG reading error: %u: %s\n", infn, error, lodepng_error_text(error));
@@ -383,7 +412,10 @@ bool load_png_image(const char *infn, tex_format_t fmt, image_t *imgout, palette
         }
     }   break;
     case FMT_I8: case FMT_I4:
-        state.info_raw.colortype = LCT_GREY;
+        // Lodepng LCT_GREY only works for pure greyscale input images, as only
+        // the R channel is decoded. Instead, we want to attempt something more
+        // sophisticated to allow for a wider range of input images.
+        state.info_raw.colortype = LCT_RGBA;
         state.info_raw.bitdepth = 8;
         break;
     case FMT_ZBUF:
@@ -406,6 +438,54 @@ bool load_png_image(const char *infn, tex_format_t fmt, image_t *imgout, palette
     if(error) {
         fprintf(stderr, "PNG decoding error: %u: %s\n", error, lodepng_error_text(error));
         goto error;
+    }
+
+    if (fmt == FMT_I4 || fmt == FMT_I8) {
+        assert(state.info_raw.colortype == LCT_RGBA);
+
+        uint8_t *output = malloc(width*height);
+
+        // Check if the image is natively greyscale, and if so, preserve it
+        // as-is, just converting it to 8bpp
+        bool input_greyscale = true;
+        for (int i=0; i<width*height; i++) {
+            uint8_t r = image[i*4+0];
+            uint8_t g = image[i*4+1];
+            uint8_t b = image[i*4+2];
+            if (!(r == g && g == b)) {
+                input_greyscale = false;
+                break;
+            }
+            output[i] = r;
+        }
+        
+        // If the input image is not greyscale, perform a conversion
+        // and rescale the output to use the full range of the output format.
+        if (!input_greyscale) {
+            float minf = 1024.0f, maxf = -1024.0f;
+            float* imgf = malloc(width*height*sizeof(float));
+            for (int i=0; i<width*height; i++) {
+                uint8_t r = image[i*4+0];
+                uint8_t g = image[i*4+1];
+                uint8_t b = image[i*4+2];
+                uint8_t a = image[i*4+3];
+
+                // Apply alpha channel if present, so that we preserve
+                // antialiasing information.
+                imgf[i] = 0.299f*r + 0.587f*g + 0.114f*b;
+                imgf[i] *= a / 255.0f;
+                minf = MIN(minf, imgf[i]);
+                maxf = MAX(maxf, imgf[i]);
+            }
+            for (int i=0; i<width*height; i++) {
+                output[i] = (imgf[i] - minf) / (maxf - minf) * 255.0f;
+            }
+            free(imgf);
+        }
+
+        free(image);
+        image = output;
+        state.info_raw.colortype = LCT_GREY;
     }
 
     // Copy the image into the output
@@ -582,19 +662,51 @@ bool spritemaker_calc_lods(spritemaker_t *spr, int algo) {
             }
             break;
         case LCT_GREY:
-            assert(prev->fmt == FMT_I8);  // only I8 supported for now
-            mipmap = malloc(mw * mh);
-            for (int y=0;y<mh;y++) {
-                uint8_t *src1 = prev->image + y*prev->width*2;
-                uint8_t *src2 = src1 + prev->width;
-                uint8_t *dst = mipmap + y*mw;
-                for (int x=0;x<mw;x++) {
-                    dst[0] = (src1[0] + src1[1] + src2[0] + src2[1]) / 4;
-                    dst += 1; src1 += 2; src2 += 2;
-                }
+            switch(prev->fmt){
+                case FMT_I4:
+                case FMT_I8:
+                {
+                    mipmap = malloc(mw * mh);
+                    for (int y=0;y<mh;y++) {
+                        uint8_t *src1 = prev->image + y*prev->width*2;
+                        uint8_t *src2 = src1 + prev->width;
+                        uint8_t *dst = mipmap + y*mw;
+                        for (int x=0;x<mw;x++) {
+                            dst[0] = (src1[0] + src1[1] + src2[0] + src2[1]) / 4;
+                            dst += 1; src1 += 2; src2 += 2;
+                        }
+                    }
+                break; }
+                default: // should never happen
+                	assert(0);
             }
             break;
-        default:
+        case LCT_GREY_ALPHA:{
+            switch (prev->fmt)
+            {
+            case FMT_IA4:
+            case FMT_IA8:
+            case FMT_IA16:
+                {
+                    mipmap = malloc(mw * mh * 2);
+                    for (int y=0;y<mh;y++) {
+                        uint8_t *src1 = prev->image + y*prev->width*2*2;
+                        uint8_t *src2 = src1 + prev->width*2;
+                        uint8_t *dst = mipmap + y*mw*2;
+                        for (int x=0;x<mw;x++) {
+                            dst[0] = (src1[0] + src1[2] + src2[0] + src2[2]) / 4;
+                            dst[1] = (src1[1] + src1[3] + src2[1] + src2[3]) / 4;
+                            dst += 2; src1 += 4; src2 += 4;
+                        }
+                    }
+                break; }
+            
+            default: // should never happen
+                assert(0);
+            }
+            break;
+        }
+        default: // all formats are covered now, but for the sake if there's a new format around in the future
             fprintf(stderr, "ERROR: mipmap calculation for format %s/%s not implemented yet\n", tex_format_name(prev->fmt), colortype_to_string(prev->ct));
             return false;
         }
@@ -836,13 +948,25 @@ bool spritemaker_convert_ihq(spritemaker_t *spr) {
     // Calculate a first 2x2 mipmap
     uint8_t *img22 = image_shrink_box(spr->images[0].image, width, height, true, true);
     uint8_t *img42 = NULL, *img24 = NULL;
-    
+
+    // Check if the original image has any meaningful alpha info
+    bool alphausage = false;
+    for(int y = 0; y < height && !alphausage; y++){
+        uint8_t* src = spr->images[0].image + y*width*4;
+        for(int x = 0; x < width && !alphausage; x++){
+            if(src[3] < 128) alphausage = true;
+            src += 4;
+        }
+    } // If there is alpha, use IA4 for the detail texture - halfs the shades count, but adds 1 bit per pixel alpha support
+    if(flag_verbose && alphausage)
+        fprintf(stderr, "IHQ: found transparent pixels, IA4 is used as detail\n");
+	
     uint8_t *best_rgb_img = NULL;
     int best_rgb_w = 0, best_rgb_h = 0;
-    float best_err = 999999;
+    float best_err = INT32_MAX;
     float best_ifactor = 0;
-    uint8_t *best_i_img = malloc(width * height);
-    uint8_t *i_img = malloc(width * height);
+    uint8_t *best_i_img = alphausage? malloc(width * height * 2) : malloc(width * height);
+    uint8_t *i_img = alphausage? malloc(width * height * 2) : malloc(width * height);
 
     for (int dir=0; dir<2; dir++) {
         uint8_t *img; int iw, ih;
@@ -859,8 +983,8 @@ bool spritemaker_convert_ihq(spritemaker_t *spr) {
         float wstep = (float)iw / width;
         float hstep = (float)ih / height;
 
-        for (int factor=1; factor<=8; factor++) {
-            float ifactor = 0.1f * factor;
+        for (int factor=1; factor<=10; factor++) {
+            float ifactor = 0.05f * factor;
             float mse = 0;
 
             for (int y=0; y<height; y++) {
@@ -873,6 +997,7 @@ bool spritemaker_convert_ihq(spritemaker_t *spr) {
                     uint8_t r0 = spr->images[0].image[(y*width + x)*4 + 0];
                     uint8_t g0 = spr->images[0].image[(y*width + x)*4 + 1];
                     uint8_t b0 = spr->images[0].image[(y*width + x)*4 + 2];
+                    uint8_t a0 = spr->images[0].image[(y*width + x)*4 + 3];
 
                     float xx = x * wstep;
                     int xx0 = (int)xx;
@@ -902,7 +1027,13 @@ bool spritemaker_convert_ihq(spritemaker_t *spr) {
 
                     float err;
                     uint8_t i = ihq_calc_best_i4(ifactor, r0, g0, b0, r, g, b, &err);
-                    i_img[y*width + x] = i;
+
+                    // If there's alpha present, include it in the texture as IA format
+                    if(alphausage){
+                        i_img[(y*width + x) * 2] = i;
+                        i_img[((y*width + x) * 2) + 1] = a0;
+                    }
+                    else i_img[y*width + x] = i;
                     // if (x==16 && y==0) {
                     //     printf("IHQ: (%d,%d): %d %d %d -> %d %d %d\n", x, y, r0, g0, b0, r, g, b);
                     //     printf("IHQ: i=%d err=%f rgb=(%d,%d,%d)\n", i, err, (int)(r*(1-ifactor)+i*ifactor), (int)(g*(1-ifactor)+i*ifactor), (int)(b*(1-ifactor)+i*ifactor));
@@ -920,8 +1051,8 @@ bool spritemaker_convert_ihq(spritemaker_t *spr) {
                 best_rgb_img = img;
                 SWAP(best_i_img, i_img);
             }
-            // if (flag_verbose)
-            //     fprintf(stderr, "IHQ: factor=%.1f mse=%f\n", ifactor, mse);
+             if (flag_verbose)
+                fprintf(stderr, "IHQ: detail factor=%.1f mse=%f\n", ifactor, mse);
         }
     }
 
@@ -929,7 +1060,8 @@ bool spritemaker_convert_ihq(spritemaker_t *spr) {
     spr->detail.blend_factor = best_ifactor;
     spr->detail.enabled = true;
     spr->detail.use_main_tex = false;
-    spr->images[7].fmt = FMT_I4;
+    spr->images[7].fmt = alphausage? FMT_IA4 : FMT_I4;
+    spr->images[7].ct = alphausage? LCT_GREY_ALPHA : LCT_GREY;
     spr->images[7].image = best_i_img;
     spr->images[7].width = width;
     spr->images[7].height = height;
@@ -1217,22 +1349,7 @@ bool spritemaker_convert_shq(spritemaker_t *spr)
 }
 
 bool spritemaker_write(spritemaker_t *spr) {
-    FILE *out;
-    if (strcmp(spr->outfn, "(stdout)") == 0) {
-        // We can't directly write to stdout because we need to seek.
-        // So use a temporary file, and then copy it to stdout.
-        out = tmpfile();
-        if (!out) {
-            perror("ERROR: cannot create temporary file");
-            return false;
-        }
-    } else {
-        out = fopen(spr->outfn, "wb");
-        if (!out) {
-            fprintf(stderr, "ERROR: cannot open output file %s\n", spr->outfn);
-            return false;
-        }
-    }
+    FILE *out = spr->out;
 
     // Write the sprite header
     // For Z-buffer image, we currently encode them as RGBA16 though that's not really correct.
@@ -1266,7 +1383,7 @@ bool spritemaker_write(spritemaker_t *spr) {
             // Convert to 16-bit RGB5551 format.
             uint8_t *img = image->image;
             for (int i=0;i<image->width*image->height;i++) {
-                w16(out, conv_rgb5551(img[0], img[1], img[2], img[3]));
+                w16(out, conv_rgb5551_dither(img[0], img[1], img[2], img[3], i % image->width, i / image->height, spr->ditheralgo));
                 img += 4;
             }
             break;
@@ -1321,8 +1438,8 @@ bool spritemaker_write(spritemaker_t *spr) {
                     uint8_t A0 = *img++;
                     uint8_t I1 = (i+1 == image->width) ? 0 : *img++;
                     uint8_t A1 = (i+1 == image->width) ? 0 : *img++;
-                    A0 = A0 ? 1 : 0;
-                    A1 = A1 ? 1 : 0;
+                    A0 = A0 >= 128 ? 1 : 0;
+                    A1 = A1 >= 128 ? 1 : 0;
                     w8(out, (uint8_t)((I0 & 0xE0) | (A0 << 4) | ((I1 & 0xE0) >> 4) | A1));
                 }
             }
@@ -1424,27 +1541,16 @@ bool spritemaker_write(spritemaker_t *spr) {
         walign(out, 8);
     }
 
-    if (strcmp(spr->outfn, "(stdout)") == 0) {
-        // Copy the temporary file to stdout
-        char buf[4096]; size_t n;
-        rewind(out);
-        while ((n = fread(buf, 1, sizeof(buf), out)) > 0)
-            fwrite(buf, 1, n, stdout);
-        fclose(out);
-        return true;
-    }
-
-    fclose(out);
     return true;
 }
 
-void spritemaker_write_pngs(spritemaker_t *spr) {
+void spritemaker_write_pngs(spritemaker_t *spr, const char *outfn) {
     for (int i=0; i<MAX_IMAGES; i++) {
         if (spr->images[i].image == NULL)
             continue;
-        char lodext[16]; sprintf(lodext, ".%d.png", i);
+        char lodext[16]; snprintf(lodext, sizeof(lodext), ".%d.png", i);
         char debugfn[2048];
-        strcpy(debugfn, spr->outfn);
+        strcpy(debugfn, outfn);
         strcpy(strrchr(debugfn, '.'), lodext);
 
         image_t *img = &spr->images[i];
@@ -1483,15 +1589,19 @@ void spritemaker_free(spritemaker_t *spr) {
     memset(spr, 0, sizeof(*spr));
 }
 
-int convert(const char *infn, const char *outfn, const parms_t *pm) {
+int convert(const char *infn, const char *outfn, const parms_t *pm, int compression) {
+    FILE *out = tmpfile();
+    bool out_is_stdout = (strstr(outfn, "(stdout)") != NULL);
+
     if (flag_verbose)
         fprintf(stderr, "Converting: %s -> %s [fmt=%s tiles=%d,%d mipmap=%s dither=%s]\n",
             infn, outfn, tex_format_name(pm->outfmt), pm->tilew, pm->tileh, mipmap_algo_name(pm->mipmap_algo), dither_algo_name(pm->dither_algo));
 
     spritemaker_t spr = {0};
 
+    spr.ditheralgo = pm->dither_algo;
     spr.infn = infn;
-    spr.outfn = outfn;
+    spr.out = out;
     spr.texparms = pm->texparms;
     if (!spr.texparms.defined) {
         spr.texparms.s.translate = 0.0f;
@@ -1534,7 +1644,7 @@ int convert(const char *infn, const char *outfn, const parms_t *pm) {
         spr.out_flags |= 0x40;
         if (!spritemaker_convert_shq(&spr))
             goto error;
-        // Compute mipmaps for IHQ
+        // Mipmaps not supported for SHQ
         if (mipmap_algo != MIPMAP_ALGO_NONE) {
             fprintf(stderr, "WARNiNG: mipmap generation is not supported for SHQ mode\n");
             mipmap_algo = MIPMAP_ALGO_NONE;
@@ -1628,14 +1738,51 @@ int convert(const char *infn, const char *outfn, const parms_t *pm) {
         goto error;
 
     // Write debug files
-    if (flag_debug)
-        spritemaker_write_pngs(&spr);
+    if (flag_debug && !out_is_stdout)
+        spritemaker_write_pngs(&spr, outfn);
 
     spritemaker_free(&spr);
+
+    // Read back the temporary file contents into RAM
+    int sz = ftell(out);
+    rewind(out);
+    uint8_t *data = malloc(sz);
+    fread(data, 1, sz, out);
+    fclose(out);
+
+    // Compress the data and store it into output file
+    // This is a nop if compression is disabled, but at least
+    // we don't have two different code paths.
+    if (out_is_stdout) {
+        out = stdout;
+    } else {
+        out = fopen(outfn, "wb");
+        if (!out) {
+            fprintf(stderr, "ERROR: can't open output file %s\n", outfn);
+            free(data);
+            return 1;
+        }
+    }
+
+    if (compression == -1) compression = DEFAULT_COMPRESSION;
+    int cmp_size = asset_compress_mem(data, sz, out, compression, 256*1024, NULL);
+    free(data);
+
+    if (flag_verbose) {
+        if (compression > 0) {
+            fprintf(stderr, "compressed: %s (%d -> %d, ratio %.1f%%)\n", outfn,
+                (int)sz, cmp_size, 100.0 * (float)cmp_size / (float)(sz == 0 ? 1 : sz));
+        } else {
+            fprintf(stderr, "written: %s (%d bytes)\n", outfn, sz);
+        }
+    }
+
+    fclose(out);
     return 0;
 
 error:
     spritemaker_free(&spr);
+    fclose(out);
     return 1;
 }
 
@@ -1702,7 +1849,7 @@ int main(int argc, char *argv[])
         infn = argv[i++];
         outfn = argv[i++];
         printf("WARNING: deprecated command-line syntax was used, please switch to new syntax\n");
-        return convert(infn, outfn, &pm);
+        return convert(infn, outfn, &pm, 0);
     }
 
     bool error = false;
@@ -1914,39 +2061,32 @@ int main(int argc, char *argv[])
 
         asprintf(&outfn, "%s/%s.sprite", outdir, basename_noext);
 
-        if (convert(infn, outfn, &pm) != 0) {
+        if (convert(infn, outfn, &pm, compression) != 0)
             error = true;
-        } else {
-            if (compression == -1)
-                compression = DEFAULT_COMPRESSION;
-            if (compression) {
-                struct stat st_decomp = {0}, st_comp = {0};
-                stat(outfn, &st_decomp);
-                asset_compress(outfn, outfn, compression, 0);
-                stat(outfn, &st_comp);
-                if (flag_verbose)
-                    fprintf(stderr, "compressed: %s (%d -> %d, ratio %.1f%%)\n", outfn,
-                    (int)st_decomp.st_size, (int)st_comp.st_size, 100.0 * (float)st_comp.st_size / (float)(st_decomp.st_size == 0 ? 1 :st_decomp.st_size));
-            }
-        }
 
         free(outfn);
     }
 
     if (!at_least_one_file) {
-        infn = "(stdin)";
-        outfn = "(stdout)";
-        if (compression > 0) {
-            fprintf(stderr, "cannot use compression when processing stdin/stdout\n");
-            return 1;
-        }
+        infn = getenv("MKSPRITE_INFN");
+        outfn = getenv("MKSPRITE_OUTFN");
+        if (infn) 
+            asprintf(&infn, "%s (stdin)", infn);
+        else 
+            infn = "(stdin)";
+        if (outfn)
+            asprintf(&outfn, "%s (stdout)", outfn);
+        else
+            outfn = "(stdout)";
+
         #ifdef _WIN32
         // Switch stdin/stdout to binary mode
         #define _O_BINARY 0x8000
         setmode(0, _O_BINARY);
         setmode(1, _O_BINARY);
         #endif
-        if (convert(infn, outfn, &pm) != 0) {
+
+        if (convert(infn, outfn, &pm, compression) != 0) {
             error = true;
         }
     }

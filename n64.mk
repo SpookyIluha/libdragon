@@ -1,13 +1,17 @@
 BUILD_DIR ?= .
 SOURCE_DIR ?= .
-DSO_COMPRESS_LEVEL ?= 1
+
+# Override this if your project uses a different directory for your DFS filesystem root
+N64_MKDFS_ROOT ?= filesystem
 
 N64_ROM_TITLE = "Made with libdragon" # Override this with the name of your game or project
+N64_ROM_CATEGORY = # Set an N64 Media Category code in the ROM header (N, D, C, E, Z)
 N64_ROM_SAVETYPE = # Supported savetypes: none eeprom4k eeprom16 sram256k sram768k sram1m flashram
 N64_ROM_RTC = # Set to true to enable the Joybus Real-Time Clock
 N64_ROM_REGIONFREE = # Set to true to allow booting on any console region
 N64_ROM_REGION = # Set to a region code (emulators will boot on a specific console region)
-N64_ROM_ELFCOMPRESS = 1 # Set compression level of ELF file in ROM
+N64_ROM_ELFCOMPRESS ?= 1 # Set compression level of ELF file in ROM
+N64_ROM_DSOCOMPRESS ?= 1 # Set compression level of DSOs file in ROM
 N64_ROM_CONTROLLER1 = # Sets the type of Controller 1 in the Advanced Homebrew Header. This could influence emulator behaviour such as Ares'
 N64_ROM_CONTROLLER2 = # Sets the type of Controller 2 in the Advanced Homebrew Header. This could influence emulator behaviour such as Ares'
 N64_ROM_CONTROLLER3 = # Sets the type of Controller 3 in the Advanced Homebrew Header. This could influence emulator behaviour such as Ares'
@@ -61,6 +65,7 @@ N64_C_AND_CXX_FLAGS += -ffunction-sections -fdata-sections -g -ffile-prefix-map=
 N64_C_AND_CXX_FLAGS += -ffast-math -ftrapping-math -fno-associative-math
 N64_C_AND_CXX_FLAGS += -DN64 -O2 -Wall -Werror -Wno-error=deprecated-declarations -fdiagnostics-color=always
 N64_C_AND_CXX_FLAGS += -Wno-error=unused-variable -Wno-error=unused-but-set-variable -Wno-error=unused-function -Wno-error=unused-parameter -Wno-error=unused-but-set-parameter -Wno-error=unused-label -Wno-error=unused-local-typedefs -Wno-error=unused-const-variable
+N64_C_AND_CXX_FLAGS += -ftrivial-auto-var-init=pattern
 N64_CFLAGS = $(N64_C_AND_CXX_FLAGS) -std=gnu17
 N64_CXXFLAGS = $(N64_C_AND_CXX_FLAGS) -std=gnu++17
 N64_ASFLAGS = -mtune=vr4300 -march=vr4300 -Wa,--fatal-warnings -I$(N64_INCLUDEDIR)
@@ -70,14 +75,15 @@ N64_DSOLDFLAGS = --emit-relocs --unresolved-symbols=ignore-all --nmagic -T$(N64_
 
 N64_TOOLFLAGS = --title $(N64_ROM_TITLE)
 N64_TOOLFLAGS += $(if $(N64_ROM_HEADER),--header $(N64_ROM_HEADER))
+N64_TOOLFLAGS += $(if $(N64_ROM_CATEGORY),--category $(N64_ROM_CATEGORY))
 N64_TOOLFLAGS += $(if $(N64_ROM_REGION),--region $(N64_ROM_REGION))
 N64_ED64ROMCONFIGFLAGS =  $(if $(N64_ROM_SAVETYPE),--savetype $(N64_ROM_SAVETYPE))
 N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_RTC),--rtc) 
 N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_REGIONFREE),--regionfree)
-N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER_TYPE1),--controller1 $(N64_ROM_CONTROLLER_TYPE1))
-N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER_TYPE2),--controller2 $(N64_ROM_CONTROLLER_TYPE2))
-N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER_TYPE3),--controller3 $(N64_ROM_CONTROLLER_TYPE3))
-N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER_TYPE4),--controller4 $(N64_ROM_CONTROLLER_TYPE4))
+N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER1),--controller1 $(N64_ROM_CONTROLLER1))
+N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER2),--controller2 $(N64_ROM_CONTROLLER2))
+N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER3),--controller3 $(N64_ROM_CONTROLLER3))
+N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER4),--controller4 $(N64_ROM_CONTROLLER4))
 
 ifeq ($(D),1)
 CFLAGS+=-g3
@@ -132,7 +138,7 @@ RSPASFLAGS+=-MMD
 %.dfs:
 	@mkdir -p $(dir $@)
 	@echo "    [DFS] $@"
-	$(N64_MKDFS) $@ $(<D) >/dev/null
+	$(N64_MKDFS) $@ "$(N64_MKDFS_ROOT)" >/dev/null
 
 # Assembly rule. We use .S for both RSP and MIPS assembly code, and we differentiate
 # using the prefix of the filename: if it starts with "rsp", it is RSP ucode, otherwise
@@ -145,12 +151,15 @@ $(BUILD_DIR)/%.o: $(SOURCE_DIR)/%.S
 		SYMPREFIX="$(subst .,_,$(subst /,_,$(basename $@)))"; \
 		TEXTSECTION="$(basename $@).text"; \
 		DATASECTION="$(basename $@).data"; \
+		METASECTION="$(basename $@).meta"; \
 		BINARY="$(basename $@).elf"; \
 		echo "    [RSP] $<"; \
 		$(N64_CC) $(RSPASFLAGS) -L$(N64_LIBDIR) -nostartfiles -Wl,-Trsp.ld -Wl,--gc-sections  -Wl,-Map=$(BUILD_DIR)/$(notdir $(basename $@)).map -o $@ $<; \
 		mv "$@" $$BINARY; \
 		$(N64_OBJCOPY) -O binary -j .text $$BINARY $$TEXTSECTION.bin; \
 		$(N64_OBJCOPY) -O binary -j .data $$BINARY $$DATASECTION.bin; \
+		$(N64_OBJCOPY) -O binary -j .meta $$BINARY $$METASECTION.bin --set-section-flags .meta=alloc,load; \
+		[ -s $$METASECTION.bin ] || printf '\0' > $$METASECTION.bin; \
 		$(N64_OBJCOPY) -I binary -O elf32-bigmips -B mips4300 \
 				--redefine-sym _binary_$${SYMPREFIX}_text_bin_start=$${FILENAME}_text_start \
 				--redefine-sym _binary_$${SYMPREFIX}_text_bin_end=$${FILENAME}_text_end \
@@ -163,9 +172,15 @@ $(BUILD_DIR)/%.o: $(SOURCE_DIR)/%.S
 				--redefine-sym _binary_$${SYMPREFIX}_data_bin_size=$${FILENAME}_data_size \
 				--set-section-alignment .data=16 \
 				--rename-section .text=.data $$DATASECTION.bin $$DATASECTION.o; \
+		$(N64_OBJCOPY) -I binary -O elf32-bigmips -B mips4300 \
+				--redefine-sym _binary_$${SYMPREFIX}_meta_bin_start=$${FILENAME}_meta_start \
+				--redefine-sym _binary_$${SYMPREFIX}_meta_bin_end=$${FILENAME}_meta_end \
+				--redefine-sym _binary_$${SYMPREFIX}_meta_bin_size=$${FILENAME}_meta_size \
+				--set-section-alignment .data=16 \
+				--rename-section .text=.data $$METASECTION.bin $$METASECTION.o; \
 		$(N64_SIZE) -G $$BINARY; \
-		$(N64_LD) -relocatable $$TEXTSECTION.o $$DATASECTION.o -o $@; \
-		rm $$TEXTSECTION.bin $$DATASECTION.bin $$TEXTSECTION.o $$DATASECTION.o; \
+		$(N64_LD) -relocatable $$TEXTSECTION.o $$DATASECTION.o $$METASECTION.o -o $@; \
+		rm $$TEXTSECTION.bin $$DATASECTION.bin $$METASECTION.bin $$TEXTSECTION.o $$DATASECTION.o $$METASECTION.o; \
 	else \
 		echo "    [AS] $<"; \
 		$(CC) -c $(ASFLAGS) -o $@ $<; \
@@ -214,7 +229,7 @@ $(BUILD_DIR)/%.o: $(SOURCE_DIR)/%.cpp
 	@echo "    [DSO] $@"
 	$(N64_LD) $(N64_DSOLDFLAGS) -Map=$(basename $(DSO_ELF)).map -o $(DSO_ELF) $(filter %.o, $^)
 	$(N64_SIZE) -G $(DSO_ELF)
-	$(N64_DSO) -o $(dir $@) -c $(DSO_COMPRESS_LEVEL) $(DSO_ELF)
+	$(N64_DSO) -o $(dir $@) -c $(N64_ROM_DSOCOMPRESS) $(DSO_ELF)
 	$(N64_SYM) $(DSO_ELF) $@.sym
 	
 %.externs:

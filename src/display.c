@@ -43,7 +43,7 @@ static interlace_mode_t __interlace_mode = INTERLACE_OFF;
 /** @brief Current VI display borders */
 static vi_borders_t __borders;
 /** @brief Number of active buffers */
-static uint32_t __buffers = NUM_BUFFERS;
+static uint32_t __buffers = 0;
 /** @brief Pointer to uncached 16-bit aligned version of buffers */
 static void *__safe_buffer[NUM_BUFFERS];
 /** @brief Currently displayed buffer */
@@ -209,9 +209,10 @@ static void update_fps(bool newframe)
  */
 static void __display_callback()
 {
-    // If a reset has occured and its the last VI interrupt before RESET_TIME_LENGTH grace period, stop all work and exit
+    // If a reset has occured and this is almost the last VI interrupt
+    // before RESET_TIME_LENGTH grace period, stop all work and exit
     uint32_t next_time = TICKS_FROM_MS(refresh_period*1000);
-    if(exception_reset_time() + next_time >= RESET_TIME_LENGTH) die();
+    if(exception_reset_time() + next_time*3 >= RESET_TIME_LENGTH) die();
 
     /* Least significant bit of the current line register indicates
        if the currently displayed field is odd or even. */
@@ -269,7 +270,9 @@ void display_init( resolution_t res, bitdepth_t bit, uint32_t num_buffers, gamma
     /* Can't have the video interrupt happening here */
     disable_interrupts();
 
-    /* Minimum is two buffers. */
+    assertf(__buffers == 0, "display_init() called while the display is already initialized.\nPlease close the current display with display_close() first.");
+
+    // Minimum is at least one buffer.
     __buffers = MAX(1, MIN(NUM_BUFFERS, num_buffers));
 
     bool serrate = res.interlaced != INTERLACE_OFF;
@@ -404,6 +407,7 @@ void display_init( resolution_t res, bitdepth_t bit, uint32_t num_buffers, gamma
     __borders = vi_calc_borders_int(__tv_type, aspect_ratio, res.overscan_margin);
 
     surfaces = malloc(sizeof(surface_t) * __buffers);
+    assert(surfaces != NULL);
 
     /* Initialize buffers and set parameters */
     for( int i = 0; i < __buffers; i++ )
