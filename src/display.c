@@ -43,7 +43,7 @@ static interlace_mode_t __interlace_mode = INTERLACE_OFF;
 /** @brief Current VI display borders */
 static vi_borders_t __borders;
 /** @brief Number of active buffers */
-static uint32_t __buffers = 0;
+static uint32_t __buffers = NUM_BUFFERS;
 /** @brief Pointer to uncached 16-bit aligned version of buffers */
 static void *__safe_buffer[NUM_BUFFERS];
 /** @brief Currently displayed buffer */
@@ -209,26 +209,27 @@ static void update_fps(bool newframe)
  */
 static void __display_callback()
 {
-    // If a reset has occured and this is almost the last VI interrupt
-    // before RESET_TIME_LENGTH grace period, stop all work and exit
+    // If a reset has occured and its the last VI interrupt before RESET_TIME_LENGTH grace period, stop all work and exit
     uint32_t next_time = TICKS_FROM_MS(refresh_period*1000);
-    if(exception_reset_time() + next_time*3 >= RESET_TIME_LENGTH) die();
+    if(exception_reset_time() + next_time >= RESET_TIME_LENGTH) die();
 
     /* Least significant bit of the current line register indicates
        if the currently displayed field is odd or even. */
-    bool field = (*VI_V_CURRENT) & 1;
+    bool evenlinenext = (*VI_V_CURRENT) & 1;
     bool interlaced = (*VI_CTRL) & (VI_CTRL_SERRATE);
 
     /* Check if the next buffer is ready to be displayed, otherwise just
        leave up the current frame. If full interlace mode is selected
        then don't update the buffer until two fields were displayed. */
     if(__interlace_mode == INTERLACE_480I_SPECIAL){
-        if(ready_mask > __rdpiphase || (ready_mask == 0 && __rdpiphase == 3)){
-            __rdpiphase = ready_mask;
+        if( ((evenlinenext && (__rdpiphase == 0 || __rdpiphase == 2)) || (!evenlinenext && (__rdpiphase == 1 || __rdpiphase == 3)))){
+            if((ready_mask > __rdpiphase || (ready_mask == 0 && __rdpiphase == 3)) ){
+                __rdpiphase = ready_mask;
+            }
             update_fps(true);
         } else update_fps(false);
     }
-    else if (!(__interlace_mode == INTERLACE_FULL && field) && fps_limit_ok()) {
+    else if (!(__interlace_mode == INTERLACE_FULL && evenlinenext) && fps_limit_ok()) {
         bool newframe = false;
         int next = buffer_next(now_showing);
         if (ready_mask & (1 << next)) {
@@ -241,20 +242,20 @@ static void __display_callback()
 
     if(__interlace_mode == INTERLACE_480I_SPECIAL){
         switch(__rdpiphase){
-            case 0: vi_write_dram_register(__safe_buffer[0] +               (!field ? __width * __bitdepth : 0)); break;
-            case 1: vi_write_dram_register(__safe_buffer[field? 0 : 1] +    (!field ? __width * __bitdepth : 0)); break;
-            case 2: vi_write_dram_register(__safe_buffer[1] +               (!field ? __width * __bitdepth : 0)); break;
-            case 3: vi_write_dram_register(__safe_buffer[field? 1 : 0] +    (!field ? __width * __bitdepth : 0)); break;
+            case 0: vi_write_dram_register(__safe_buffer[0] +               (!evenlinenext ? __width * __bitdepth : 0)); break;
+            case 1: vi_write_dram_register(__safe_buffer[evenlinenext? 1 : 0] +    (!evenlinenext ? __width * __bitdepth : 0)); break;
+            case 2: vi_write_dram_register(__safe_buffer[1] +               (!evenlinenext ? __width * __bitdepth : 0)); break;
+            case 3: vi_write_dram_register(__safe_buffer[evenlinenext? 0 : 1] +    (!evenlinenext ? __width * __bitdepth : 0)); break;
             default: assert(0);
         }
     }
-    else vi_write_dram_register(__safe_buffer[now_showing] + (interlaced && !field ? __width * __bitdepth : 0));
+    else vi_write_dram_register(__safe_buffer[now_showing] + (interlaced && !evenlinenext ? __width * __bitdepth : 0));
 
     // FIXME: PAL-M on old boards like NUS-CPU-02 requires changing V_BURST every field, otherwise
     // the image seems garbled at the top. It is probably a bug in old revisions of the VI chip,
     // since the problem doesn't exist on newer boards.
     if (__tv_type == TV_MPAL && interlaced) {
-        if (field == 0) {
+        if (evenlinenext == 0) {
             *VI_V_BURST = 0x000b0202;
         } else {
             *VI_V_BURST = 0x000e0204;
@@ -270,9 +271,7 @@ void display_init( resolution_t res, bitdepth_t bit, uint32_t num_buffers, gamma
     /* Can't have the video interrupt happening here */
     disable_interrupts();
 
-    assertf(__buffers == 0, "display_init() called while the display is already initialized.\nPlease close the current display with display_close() first.");
-
-    // Minimum is at least one buffer.
+    /* Minimum is two buffers. */
     __buffers = MAX(1, MIN(NUM_BUFFERS, num_buffers));
 
     bool serrate = res.interlaced != INTERLACE_OFF;
@@ -407,7 +406,6 @@ void display_init( resolution_t res, bitdepth_t bit, uint32_t num_buffers, gamma
     __borders = vi_calc_borders_int(__tv_type, aspect_ratio, res.overscan_margin);
 
     surfaces = malloc(sizeof(surface_t) * __buffers);
-    assert(surfaces != NULL);
 
     /* Initialize buffers and set parameters */
     for( int i = 0; i < __buffers; i++ )
