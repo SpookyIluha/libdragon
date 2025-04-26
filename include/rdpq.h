@@ -466,8 +466,8 @@ inline void rdpq_set_yuv_parms(uint16_t k0, uint16_t k1, uint16_t k2, uint16_t k
     assertf(x1fx <= 0xFFF, "x1 must be less than 1024"); \
     assertf(y1fx <= 0xFFF, "y1 must be less than 1024"); \
     __rdpq_set_scissor( \
-        _carg(x0fx, 0xFFF, 12) | _carg(y0fx, 0xFFF, 0) | _carg(f, 0x1, 25) | _carg(o, 0x1, 24), \
-        _carg(x1fx, 0xFFF, 12) | _carg(y1fx, 0xFFF, 0)); \
+        _carg(x0fx, 0xFFF, 12) | _carg(y0fx, 0xFFF, 0), \
+        _carg(x1fx, 0xFFF, 12) | _carg(y1fx, 0xFFF, 0) | _carg(f, 0x1, 25) | _carg(o, 0x1, 24)); \
 })
 
 /**
