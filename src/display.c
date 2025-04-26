@@ -72,6 +72,7 @@ static float min_refresh_period_rounded;
 volatile bool __rdpinterlace = false;
 volatile bool __rdpfield     = false;
 volatile int __rdpiphase = 0;
+volatile int __rdpcompleted[4] = {0};
 volatile bool __rdpidrawing = false;
 
 bool display_get_rdpinterlace(){
@@ -220,6 +221,9 @@ static void __display_callback()
     bool interlaced = (*VI_CTRL) & (VI_CTRL_SERRATE);
 
     frameb++;
+    for(int  i = 0; i < 4; i++){
+        if(__rdpcompleted[i] >= 0) __rdpcompleted[i]++;
+    }
     //debugf("F%02llu- L: %i VI: %i RDP: %lu\n", frameb, (int)evenlinenext, __rdpiphase, ready_mask);
 
     /* Check if the next buffer is ready to be displayed, otherwise just
@@ -244,11 +248,19 @@ static void __display_callback()
     }
 
     if(__interlace_mode == INTERLACE_480I_SPECIAL){
-        switch(__rdpiphase){
-            case 0: vi_write_dram_register(__safe_buffer[0] +                       (!evenlinenext ? __width * __bitdepth : 0)); break;
-            case 1: vi_write_dram_register(__safe_buffer[evenlinenext? 1 : 0] +     (!evenlinenext ? __width * __bitdepth : 0)); break;
-            case 2: vi_write_dram_register(__safe_buffer[1] +                       (!evenlinenext ? __width * __bitdepth : 0)); break;
-            case 3: vi_write_dram_register(__safe_buffer[evenlinenext? 0 : 1] +     (!evenlinenext ? __width * __bitdepth : 0)); break;
+        int minindex = 0; {
+            int minvalue = INT16_MAX;
+            int i = evenlinenext? 1 : 0;
+            for(; i < 4; i+=2)
+                if(__rdpcompleted[i] >= 0 && __rdpcompleted[i] < minvalue){
+                    minindex = i;
+                    minvalue = __rdpcompleted[i];}
+        }
+        switch(minindex){
+            case 0: vi_write_dram_register(__safe_buffer[0] +  __width * __bitdepth); break;
+            case 1: vi_write_dram_register(__safe_buffer[1]); break;
+            case 2: vi_write_dram_register(__safe_buffer[1] +  __width * __bitdepth); break;
+            case 3: vi_write_dram_register(__safe_buffer[0]); break;
             default: assert(0);
         }
     }
@@ -625,8 +637,10 @@ void display_show( surface_t* surf )
     //disable_interrupts();
 
     if(__interlace_mode == INTERLACE_480I_SPECIAL){
+        __rdpcompleted[ready_mask] = 0;
         ready_mask++;
         if(ready_mask > 3) ready_mask = 0;
+        __rdpcompleted[ready_mask] = -1;
         __rdpidrawing = false;
     }
     else{
