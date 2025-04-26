@@ -51,7 +51,7 @@ static int now_showing = -1;
 /** @brief Bitmask of surfaces that are currently being drawn */
 static uint32_t drawing_mask = 0;
 /** @brief Bitmask of surfaces that are ready to be shown */
-static volatile uint32_t ready_mask = 0;
+volatile uint32_t ready_mask = 0;
 /** @brief Auto detected TV region for display */
 static uint32_t __tv_type;
 /** @brief Actual display refresh rate */
@@ -207,6 +207,7 @@ static void update_fps(bool newframe)
  *
  * If there is another frame to display, display the frame
  */
+uint64_t frameb = 0;
 static void __display_callback()
 {
     // If a reset has occured and its the last VI interrupt before RESET_TIME_LENGTH grace period, stop all work and exit
@@ -218,16 +219,18 @@ static void __display_callback()
     bool evenlinenext = (*VI_V_CURRENT) & 1;
     bool interlaced = (*VI_CTRL) & (VI_CTRL_SERRATE);
 
+    frameb++;
+    //debugf("F%02llu- L: %i VI: %i RDP: %lu\n", frameb, (int)evenlinenext, __rdpiphase, ready_mask);
+
     /* Check if the next buffer is ready to be displayed, otherwise just
        leave up the current frame. If full interlace mode is selected
        then don't update the buffer until two fields were displayed. */
     if(__interlace_mode == INTERLACE_480I_SPECIAL){
-        if( ((evenlinenext && (__rdpiphase == 0 || __rdpiphase == 2)) || (!evenlinenext && (__rdpiphase == 1 || __rdpiphase == 3)))){
-            if((ready_mask > __rdpiphase || (ready_mask == 0 && __rdpiphase == 3)) ){
-                __rdpiphase = ready_mask;
-            }
-            update_fps(true);
-        } else update_fps(false);
+        //if( ((evenlinenext && (__rdpiphase == 0 || __rdpiphase == 2)) || (!evenlinenext && (__rdpiphase == 1 || __rdpiphase == 3)))){
+            if(ready_mask == __rdpiphase) {update_fps(false);}
+            else {update_fps(true);}
+            __rdpiphase = ready_mask;
+        //} else update_fps(false);
     }
     else if (!(__interlace_mode == INTERLACE_FULL && evenlinenext) && fps_limit_ok()) {
         bool newframe = false;
@@ -242,10 +245,10 @@ static void __display_callback()
 
     if(__interlace_mode == INTERLACE_480I_SPECIAL){
         switch(__rdpiphase){
-            case 0: vi_write_dram_register(__safe_buffer[0] +               (!evenlinenext ? __width * __bitdepth : 0)); break;
-            case 1: vi_write_dram_register(__safe_buffer[evenlinenext? 1 : 0] +    (!evenlinenext ? __width * __bitdepth : 0)); break;
-            case 2: vi_write_dram_register(__safe_buffer[1] +               (!evenlinenext ? __width * __bitdepth : 0)); break;
-            case 3: vi_write_dram_register(__safe_buffer[evenlinenext? 0 : 1] +    (!evenlinenext ? __width * __bitdepth : 0)); break;
+            case 0: vi_write_dram_register(__safe_buffer[0] +                       (!evenlinenext ? __width * __bitdepth : 0)); break;
+            case 1: vi_write_dram_register(__safe_buffer[evenlinenext? 1 : 0] +     (!evenlinenext ? __width * __bitdepth : 0)); break;
+            case 2: vi_write_dram_register(__safe_buffer[1] +                       (!evenlinenext ? __width * __bitdepth : 0)); break;
+            case 3: vi_write_dram_register(__safe_buffer[evenlinenext? 0 : 1] +     (!evenlinenext ? __width * __bitdepth : 0)); break;
             default: assert(0);
         }
     }
@@ -547,13 +550,13 @@ surface_t* display_try_get(void)
 
         __rdpidrawing = true;
         switch(ready_mask){
-            case 0: retval = &surfaces[1]; break;
+            case 0: retval = &surfaces[0]; break;
             case 1: retval = &surfaces[1]; break;
-            case 2: retval = &surfaces[0]; break;
+            case 2: retval = &surfaces[1]; break;
             case 3: retval = &surfaces[0]; break;
         }
         __rdpinterlace = true;
-        __rdpfield = (ready_mask == 1 || ready_mask == 3)? true : false;
+        __rdpfield = (ready_mask == 1 || ready_mask == 3)? false : true;
     }
     else{
         next = buffer_next(now_showing);
@@ -619,7 +622,7 @@ void display_show( surface_t* surf )
     if( surf == NULL ) { return; }
 
     /* Can't have the video interrupt screwing this up */
-    disable_interrupts();
+    //disable_interrupts();
 
     if(__interlace_mode == INTERLACE_480I_SPECIAL){
         ready_mask++;
@@ -643,7 +646,7 @@ void display_show( surface_t* surf )
     }
 
 
-    enable_interrupts();
+    //enable_interrupts();
 }
 
 /**
