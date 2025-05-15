@@ -98,6 +98,8 @@ typedef enum {
     INTERLACE_HALF,
     /** @brief Video output is interlaced and buffer is swapped only on even fields */
     INTERLACE_FULL,
+    /** @brief Video output is interlaced and rdp is interlaced too, the buffer is swapped partially only when rdp has drawn the field buffer */
+    INTERLACE_RDP
 } interlace_mode_t;
 
 /**
@@ -437,6 +439,27 @@ float display_get_delta_time(void);
  * @param fps           The maximum number of frames per second to render (fractionals allowed)
  */
 void display_set_fps_limit(float fps);
+
+/**
+ * @brief Returns whether to enable the RDP interlacing feature, used with INTERLACE_RDP mode
+ * @return bool        Whether the RDP interlacing should be enabled with current display settings
+ */
+bool display_get_rdpinterlace();
+
+/** @brief RDP interlace field options */
+typedef enum
+{
+    /** @brief draw only even lines when rendering */
+    FIELD_KEEP_EVEN = 0,
+    /** @brief draw only odd lines when rendering */
+    FIELD_KEEP_ODD = 1
+} rdpfield_t;
+
+/**
+ * @brief Returns which field to keep using the RDP interlaced scissoring, used with INTERLACE_RDP mode
+ * @return bool        RDP interlace field option to use with scissoring
+ */
+rdpfield_t display_get_rdpfield();
 
 /**
  * @brief Returns a surface that points to the framebuffer currently being shown on screen.

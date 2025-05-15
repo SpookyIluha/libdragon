@@ -186,6 +186,26 @@ static void update_fps(bool newframe)
     last_frame_counter = 0;
 }
 
+
+volatile bool __rdpinterlace = false;
+volatile rdpfield_t __rdpfield     = FIELD_KEEP_EVEN;
+volatile uint64_t  __rdpiphase = 0;
+volatile uint64_t  __viiphase = 0;
+volatile bool __rdpidrawing = false;
+volatile uint64_t __rdpbuffer = 0;
+
+bool display_get_rdpinterlace(){
+    return __rdpinterlace;
+}
+
+rdpfield_t display_get_rdpfield(){
+    return __rdpfield;
+}
+
+bool iseven(int x){
+    return ((x & 1) == 0);
+}
+
 /**
  * @brief Interrupt handler for vertical blank
  *
@@ -200,12 +220,25 @@ static void __display_callback(void *arg)
 
     /* Least significant bit of the current line register indicates
        if the currently displayed field is odd or even. */
-    bool field = (*VI_V_CURRENT) & 1;
+    bool evenlinenext = (*VI_V_CURRENT) & 1;
 
     /* Check if the next buffer is ready to be displayed, otherwise just
        leave up the current frame. If full interlace mode is selected
        then don't update the buffer until two fields were displayed. */
-    if (!(__interlace_mode == INTERLACE_FULL && field) && fps_limit_ok()) {
+
+    if(__interlace_mode == INTERLACE_RDP){
+        bool newframe = false;  // switch the buffer when strict conditions are met for the scheduler
+        if(!evenlinenext && __viiphase <= __rdpiphase && fps_limit_ok()) {__viiphase++; newframe = true;}
+        else{
+            if(iseven(__viiphase) && !evenlinenext && __viiphase < __rdpiphase && fps_limit_ok()) {__viiphase++; newframe = true;}
+            if(!iseven(__viiphase) && evenlinenext && __viiphase < __rdpiphase && fps_limit_ok()) {__viiphase++; newframe = true;}
+        }
+        update_fps(newframe);
+        
+        if(evenlinenext){now_showing = ((__viiphase / 2) + 1) % 3;}  // set the current showing buffer
+        else {now_showing = ((__viiphase + 1) / 2) % 3;}
+    }
+    else if (!(__interlace_mode == INTERLACE_FULL && evenlinenext) && fps_limit_ok()) {
         bool newframe = false;
         int next = buffer_next(now_showing);
         if (ready_mask & (1 << next)) {
@@ -379,6 +412,13 @@ void display_init( resolution_t res, bitdepth_t bit, uint32_t num_buffers, gamma
     now_showing = 0;
     drawing_mask = 0;
     ready_mask = 0;
+
+    __rdpinterlace = false;
+    __rdpfield     = FIELD_KEEP_EVEN;
+    __rdpiphase = 0;
+    __viiphase = 0;
+    __rdpidrawing = false;
+
     vi_show(&surfaces[0]);
 
     /* Workaround for VI bug */
@@ -426,6 +466,12 @@ void display_close()
     drawing_mask = 0;
     ready_mask = 0;
 
+    __rdpinterlace = false;
+    __rdpfield     = FIELD_KEEP_EVEN;
+    __rdpiphase = 0;
+    __viiphase = 0;
+    __rdpidrawing = false;
+
     if ( surf_zbuf.buffer )
     {
         surface_free(&surf_zbuf);
@@ -435,6 +481,9 @@ void display_close()
             zbuf_sbrk_top = false;
         }
     }
+
+    __width = 0;
+    __height = 0;
 
     // Blank the image and wait until it actually happens, before
     // freeing the buffers.
@@ -451,11 +500,8 @@ void display_close()
         }
         free(surfaces);
         surfaces = NULL;
+        __buffers = 0;
     }
-
-    __width = 0;
-    __height = 0;
-    __buffers = 0;
 }
 
 surface_t* display_try_get(void)
@@ -464,7 +510,6 @@ surface_t* display_try_get(void)
     int next;
 
     /* Can't have the video interrupt happening here */
-    disable_interrupts();
 
     /* Calculate index of next display context to draw on. We need
        to find the first buffer which is not being drawn upon nor
@@ -473,17 +518,33 @@ surface_t* display_try_get(void)
        Notice that the loop is always executed once, so it also works
        in the case of a single display buffer, though it at least
        wait for that buffer to be shown. */
-    next = buffer_next(now_showing);
-    do {
-        if (((drawing_mask | ready_mask) & (1 << next)) == 0)  {
-            retval = &surfaces[next];
-            drawing_mask |= 1 << next;
-            break;
-        }
-        next = buffer_next(next);
-    } while (next != now_showing);
+    if(__interlace_mode == INTERLACE_RDP){
+        volatile bool isdrawing = true;
+        volatile bool viphase = __viiphase;
 
-    enable_interrupts();
+        while(isdrawing) {isdrawing = __rdpidrawing; }  // wait for the RDP if we're way too slow
+        while(__viiphase < (__rdpiphase - 1)) {} // wait for VI if we're way too fast
+
+        __rdpidrawing = true;
+        int surfindex = ((__rdpiphase / 2) + 2) % 3;
+        __rdpbuffer = surfindex;
+        retval = &surfaces[surfindex];
+
+        __rdpinterlace = true;
+        __rdpfield = iseven(__rdpiphase)? FIELD_KEEP_EVEN : FIELD_KEEP_ODD;
+    } else {
+        disable_interrupts();
+        next = buffer_next(now_showing);
+        do {
+            if (((drawing_mask | ready_mask) & (1 << next)) == 0)  {
+                retval = &surfaces[next];
+                drawing_mask |= 1 << next;
+                break;
+            }
+            next = buffer_next(next);
+        } while (next != now_showing);
+        enable_interrupts();
+    }
 
     /* Possibility of returning nothing, or a valid display context */
     return retval;
@@ -533,24 +594,30 @@ void display_show( surface_t* surf )
     /* They tried drawing on a bad context */
     if( surf == NULL ) { return; }
 
-    /* Can't have the video interrupt screwing this up */
-    disable_interrupts();
+    if(__interlace_mode == INTERLACE_RDP){
+        __rdpiphase++;
+        __rdpidrawing = false;
+    }
+    else{
+        /* Can't have the video interrupt screwing this up */
+        disable_interrupts();
 
-    /* Correct to ensure we are handling the right screen */
-    int i = surf - surfaces;
+        /* Correct to ensure we are handling the right screen */
+        int i = surf - surfaces;
 
-    assertf(i >= 0 && i < __buffers, "Display context is not valid!");
+        assertf(i >= 0 && i < __buffers, "Display context is not valid!");
 
-    /* Check we have not unlocked this display already and is pending drawn. */
-    assertf(!(ready_mask & (1 << i)), "display_show called again on the same display %d (mask: %lx)", i, ready_mask);
+        /* Check we have not unlocked this display already and is pending drawn. */
+        assertf(!(ready_mask & (1 << i)), "display_show called again on the same display %d (mask: %lx)", i, ready_mask);
 
-    /* This should match, or something went awry */
-    assertf(drawing_mask & (1 << i), "display_show called on non-locked display %d (mask: %lx)", i, drawing_mask);
+        /* This should match, or something went awry */
+        assertf(drawing_mask & (1 << i), "display_show called on non-locked display %d (mask: %lx)", i, drawing_mask);
 
-    drawing_mask &= ~(1 << i);
-    ready_mask |= 1 << i;
+        drawing_mask &= ~(1 << i);
+        ready_mask |= 1 << i;
 
-    enable_interrupts();
+        enable_interrupts();
+    }
 }
 
 uint32_t display_get_width(void)

@@ -452,11 +452,13 @@ inline void rdpq_set_yuv_parms(uint16_t k0, uint16_t k1, uint16_t k2, uint16_t k
  * @see #rdpq_attach
  * @see #rdpq_set_color_image
  */
-#define rdpq_set_scissor(x0, y0, x1, y1) ({ \
+#define rdpq_set_scissor(x0, y0, x1, y1, inter, keepodd) ({ \
     int32_t x0fx = (x0)*4; \
     int32_t y0fx = (y0)*4; \
     int32_t x1fx = (x1)*4; \
     int32_t y1fx = (y1)*4; \
+    int32_t f = (inter)? 1 : 0; \
+    int32_t o = (keepodd)? 1 : 0; \
     assertf(x0fx <= x1fx, "x1 must be greater or equal to x0"); \
     assertf(y0fx <= y1fx, "y1 must be greater or equal to y0"); \
     assertf(x0fx >= 0, "x0 must be positive"); \
@@ -465,7 +467,7 @@ inline void rdpq_set_yuv_parms(uint16_t k0, uint16_t k1, uint16_t k2, uint16_t k
     assertf(y1fx <= 0xFFF, "y1 must be less than 1024"); \
     __rdpq_set_scissor( \
         _carg(x0fx, 0xFFF, 12) | _carg(y0fx, 0xFFF, 0), \
-        _carg(x1fx, 0xFFF, 12) | _carg(y1fx, 0xFFF, 0)); \
+        _carg(x1fx, 0xFFF, 12) | _carg(y1fx, 0xFFF, 0) | _carg(f, 0x1, 25) | _carg(o, 0x1, 24)); \
 })
 
 /**

@@ -1018,7 +1018,7 @@ void rdpq_set_color_image(const surface_t *surface)
         uint32_t cfg = rdpq_config_disable(RDPQ_CFG_AUTOSCISSOR);
         rdpq_set_color_image_raw(0, RDPQ_VALIDATE_DETACH_ADDR, FMT_I8, 8, 8, 8);
         rdpq_config_set(cfg);
-        rdpq_set_scissor(0, 0, 1, 0);
+        rdpq_set_scissor(0, 0, 1, 0, 0, 0);
         return;
     }
     assertf((PhysicalAddr(surface->buffer) & 63) == 0,
