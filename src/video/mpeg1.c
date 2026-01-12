@@ -1,8 +1,8 @@
 /**
- * @file mpeg2.c
+ * @file mpeg1.c
  * @author Giovanni Bajo <giovannibajo@gmail.com>
  */
-#include "mpeg2.h"
+#include "mpeg1.h"
 #include "n64sys.h"
 #include "rspq.h"
 #include "rdpq.h"
@@ -12,15 +12,35 @@
 #include "debug.h"
 #include "profile.h"
 #include "utils.h"
+#include "video_internal.h"
 #include <assert.h>
 #include <errno.h>
 #include "mpeg1_internal.h"
 
-typedef struct mpeg2_s {
+typedef struct mpeg1_s {
+	video_t video;
 	plm_buffer_t *buf;
 	plm_video_t *v;
 	void *f;
-} mpeg2_t;
+} mpeg1_t;
+
+typedef enum {
+	PS_MPEG,
+	PS_MPEG_FINDSTART,
+	PS_MPEG_HASSTART,
+	PS_MPEG_DECODESLICE,
+	PS_MPEG_MB,
+	PS_MPEG_MB_MV,
+	PS_MPEG_MB_PREDICT,
+	PS_MPEG_MB_DECODE,
+	PS_MPEG_MB_DECODE_DC,
+	PS_MPEG_MB_DECODE_AC,
+	PS_MPEG_MB_DECODE_AC_VLC,
+	PS_MPEG_MB_DECODE_AC_CODE,
+	PS_MPEG_MB_DECODE_AC_DEQUANT,
+	PS_MPEG_MB_DECODE_BLOCK,
+	PS_MPEG_MB_DECODE_BLOCK_IDCT,
+} MPEG1ProfileSlot;
 
 DEFINE_RSP_UCODE(rsp_mpeg1);
 
@@ -108,14 +128,15 @@ void rsp_mpeg1_set_quant_matrix(bool intra, const uint8_t quant_mtx[64]) {
 #define PL_MPEG_IMPLEMENTATION
 #include "pl_mpeg/pl_mpeg.h"
 
-mpeg2_t *mpeg2_open(const char *fn) {
-	mpeg2_t *mp2 = malloc(sizeof(mpeg2_t));
-	memset(mp2, 0, sizeof(mpeg2_t));
+static video_t *mpeg1_open(const char *fn) {
+	mpeg1_t *mp1 = malloc(sizeof(mpeg1_t));
+	assertf(mp1, "Out of memory");
+	memset(mp1, 0, sizeof(mpeg1_t));
 
 	rsp_mpeg1_init();
 
-	mp2->buf = plm_buffer_create_with_filename(fn);
-	assertf(mp2->buf, "error opening file %s: %s\n", fn, strerror(errno));
+	mp1->buf = plm_buffer_create_with_filename(fn);
+	assertf(mp1->buf, "error opening file %s: %s\n", fn, strerror(errno));
 
 	// In the common case of accessing a movie stream
 	// from the ROM, disable buffering. This will allow
@@ -123,53 +144,83 @@ mpeg2_t *mpeg2_open(const char *fn) {
 	// without any intervening memcpy. We keep buffering on
 	// for other supports like SD cards.
 	if (strncmp(fn, "rom:/", 5) == 0) {
-		setvbuf(mp2->buf->fh, NULL, _IONBF, 0);
+		setvbuf(mp1->buf->fh, NULL, _IONBF, 0);
 	}
 
-	mp2->v = plm_video_create_with_buffer(mp2->buf, true);
-	assert(mp2->v);
+	mp1->v = plm_video_create_with_buffer(mp1->buf, true);
+	assert(mp1->v);
 
 	// Force decoding of header. This would be done lazily but better do it
 	// now to catch any errors early.
-	if (!plm_video_has_header(mp2->v)) {
+	if (!plm_video_has_header(mp1->v)) {
 		assertf(0, "invalid header in video stream\n");
 	}
 
-	return mp2;
+	// Fill in information structure
+	mp1->video.info.width = plm_video_get_width(mp1->v);
+	mp1->video.info.height = plm_video_get_height(mp1->v);
+	mp1->video.info.framerate = plm_video_get_framerate(mp1->v);
+	mp1->video.info.aspect_ratio = (float)plm_video_get_aspect_ratio(mp1->v);
+
+	// MPEG1 does not specify colorspace. Historically, the vast amount of MPEG1
+	// streams were encoded using BT.601 standard with TV levels, and that's also
+	// the default for ffmpeg when encoding MPEG1, so we assume that here.
+	mp1->video.info.colorspace = YUV_BT601_TV;
+
+	return &mp1->video;
 }
 
-int mpeg2_get_width(mpeg2_t *mp2) {
-	return plm_video_get_width(mp2->v);
+static bool mpeg1_next_frame(video_t *v) {
+	mpeg1_t *mp1 = (mpeg1_t *)v;
+	PROFILE_START(PS_MPEG);
+	mp1->f = plm_video_decode(mp1->v);
+	PROFILE_STOP(PS_MPEG);
+	return (mp1->f != NULL);
 }
 
-int mpeg2_get_height(mpeg2_t *mp2) {
-	return plm_video_get_height(mp2->v);
+static void mpeg1_rewind(video_t *v) {
+	mpeg1_t *mp1 = (mpeg1_t *)v;
+	plm_video_rewind(mp1->v);
 }
 
-float mpeg2_get_framerate(mpeg2_t *mp2) {
-	return plm_video_get_framerate(mp2->v);
-}
-
-bool mpeg2_next_frame(mpeg2_t *mp2) {
-	PROFILE_START(PS_MPEG, 0);
-	mp2->f = plm_video_decode(mp2->v);
-	PROFILE_STOP(PS_MPEG, 0);
-	return (mp2->f != NULL);
-}
-
-void mpeg2_rewind(mpeg2_t *mp2) {
-	plm_video_rewind(mp2->v);
-}
-
-yuv_frame_t mpeg2_get_frame(mpeg2_t *mp2) {
-	plm_frame_t *frame = mp2->f;
+static yuv_frame_t mpeg1_get_frame(video_t *v) {
+	mpeg1_t *mp1 = (mpeg1_t *)v;
+	plm_frame_t *frame = mp1->f;
 	surface_t yp  = surface_make_linear(frame->y.data,  FMT_I8, frame->width,   frame->height);
 	surface_t cbp = surface_make_linear(frame->cb.data, FMT_I8, frame->width/2, frame->height/2);
 	surface_t crp = surface_make_linear(frame->cr.data, FMT_I8, frame->width/2, frame->height/2);
 	return (yuv_frame_t){ .y = yp, .u = cbp, .v = crp };
 }
 
-void mpeg2_close(mpeg2_t *mp2) {
-	plm_video_destroy(mp2->v);
-	free(mp2);
+static void mpeg1_close(video_t *v) {
+	mpeg1_t *mp1 = (mpeg1_t *)v;
+	plm_video_destroy(mp1->v);
+	free(mp1);
 }
+
+void __mpeg1_profile_init(void) {
+	profile_register(PS_MPEG, "MPEG", 0);
+	profile_register(PS_MPEG_FINDSTART, "FindStart", 1);
+	profile_register(PS_MPEG_HASSTART, "HasStart", 1);
+	profile_register(PS_MPEG_DECODESLICE, "DecodeSlice", 1);
+	profile_register(PS_MPEG_MB, "MacroB", 1);
+	profile_register(PS_MPEG_MB_MV, "MV", 2);
+	profile_register(PS_MPEG_MB_PREDICT, "Predict", 2);
+	profile_register(PS_MPEG_MB_DECODE, "Decode", 2);
+	profile_register(PS_MPEG_MB_DECODE_DC, "DecodeDC", 3);
+	profile_register(PS_MPEG_MB_DECODE_AC, "DecodeAC", 3);
+	profile_register(PS_MPEG_MB_DECODE_AC_VLC, "DecodeACVLC", 4);
+	profile_register(PS_MPEG_MB_DECODE_AC_CODE, "DecodeACCode", 4);
+	profile_register(PS_MPEG_MB_DECODE_AC_DEQUANT, "DecodeACDeQuant", 4);
+	profile_register(PS_MPEG_MB_DECODE_BLOCK, "DecodeBlock", 3);
+	profile_register(PS_MPEG_MB_DECODE_BLOCK_IDCT, "DecodeBlockIDCT", 4);
+}
+
+video_codec_t mpeg1_codec = {
+	.extension = ".m1v",
+	.open = mpeg1_open,
+	.close = mpeg1_close,
+	.next_frame = mpeg1_next_frame,
+	.get_frame = mpeg1_get_frame,
+	.rewind = mpeg1_rewind,
+};
