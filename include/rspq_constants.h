@@ -26,9 +26,9 @@
 
 /** @brief Internal overlay header size in bytes */
 #if RSPQ_PROFILE
-#define RSPQ_OVERLAY_HEADER_SIZE     30
+#define RSPQ_OVERLAY_HEADER_SIZE     18
 #else
-#define RSPQ_OVERLAY_HEADER_SIZE     28
+#define RSPQ_OVERLAY_HEADER_SIZE     16
 #endif
 
 #define RSPQ_BLOCK_MIN_SIZE            64       ///< Minimum / maximum size of a block's chunk (contiguous memory buffer)

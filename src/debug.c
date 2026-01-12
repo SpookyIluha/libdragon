@@ -13,7 +13,6 @@
 #include <sys/errno.h>
 #include "console.h"
 #include "debug.h"
-#include "emux.h"
 #include "regsinternal.h"
 #include "system.h"
 #include "n64types.h"
@@ -148,11 +147,6 @@ static void isviewer_write(const uint8_t *data, int len)
 		io_write(ISVIEWER_WRITE_POINTER, l);
 		len -= l;
 	}
-}
-
-static void emux_write(const uint8_t *data, int len)
-{
-	emux_logn((const char*)data, len);
 }
 
 static void usblog_write(const uint8_t *data, int len)
@@ -308,21 +302,12 @@ bool debug_init_usblog(void)
 
 bool debug_init_isviewer(void)
 {
-	if (emux_detect() & EMUX_FEAT_LOG)
-	{
-		hook_init_once();
-		debug_writer[1] = emux_write;
-		return true;
-	}
+	if (!isviewer_init())
+		return false;
 
-	if (isviewer_init())
-	{
-		hook_init_once();
-		debug_writer[1] = isviewer_write;
-		return true;
-	}
-	
-	return false;
+	hook_init_once();
+	debug_writer[1] = isviewer_write;
+	return true;
 }
 
 bool debug_init_sdlog(const char *fn, const char *openfmt)

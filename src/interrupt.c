@@ -150,9 +150,12 @@ static void __register_callback( struct callback_link ** head, void (*callback)(
         /* Add to beginning of linked list */
         struct callback_link *next = *head;
         (*head) = malloc(sizeof(struct callback_link));
-        assertf(*head, "Out of memory");
-        (*head)->next=next;
-        (*head)->callback=callback;
+
+        if( *head )
+        {
+            (*head)->next=next;
+            (*head)->callback=callback;
+        }
     }
 }
 

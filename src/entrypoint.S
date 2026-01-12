@@ -9,7 +9,6 @@
 ############################################################
 
 #include "regs.S"
-#include "emux.inc"
 
 	.set noreorder
 
@@ -59,6 +58,5 @@ _start:
 	li a1, 0
 
 _abort:
-	emux_ioctl_exit				/* request the emulator to exit */
-1:	j 1b
+	j _abort
 	nop

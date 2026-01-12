@@ -29,7 +29,6 @@
 #include "audio.h"
 #include "entropy.h"
 #include "console.h"
-#include "emux.h"
 #include "debug.h"
 #include "fat.h"
 #include "joybus.h"
@@ -69,11 +68,7 @@
 #include "exception.h"
 #include "dir.h"
 #include "yuv.h"
-#include "subtitles.h"
-#include "fmv.h"
-#include "video.h"
-#include "mpeg1.h"
-#include "h264.h"
+#include "mpeg2.h"
 #include "mixer.h"
 #include "samplebuffer.h"
 #include "wav64.h"
@@ -104,6 +99,6 @@
 #include "bbfs.h"
 #include "ioctl.h"
 #include "a3d.h"
-#include "profile.h"
+
 
 #endif

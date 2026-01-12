@@ -50,9 +50,8 @@ typedef struct {
 typedef struct {
     uint32_t func_sidx;     ///< Index of the function name in the string table
     uint32_t file_sidx;     ///< Index of the file name in the string table
-    uint32_t line;          ///< Line number (or 0 if this symbol generically refers to a whole function)
-    uint32_t func_off;      ///< Offset of the symbol within its function
-    bool is_inline;         ///< True if the symbol is an inlined function
+    uint32_t line;           ///< Line number (or 0 if this symbol generically refers to a whole function)
+    uint32_t func_off;       ///< Offset of the symbol within its function
 } symtable_entry_t;
 
 /** 
@@ -66,17 +65,14 @@ symtable_header_t symt_open(void *addr);
 extern const char *UNKNOWN_SYMBOL;
 
 /**
- * @brief Find one or more symbols in the SYMT file by address.
+ * @brief Find a symbol in the SYMT file by address.
  * 
- * There could be multiple symbols for the same address, in case of inlined functions.
- * 
- * @param symt          SYMT file header
- * @param addr          Address to search for
- * @param entries       Output entry structure array
- * @param max_entries   Size of the output entry array
- * @return Number of entries found (0..max_entries)
+ * @param symt      SYMT file header
+ * @param addr      Address to search for
+ * @param entry     Output entry structure
+ * @return true if found, false otherwise
  */
-int symt_find_symbol(symtable_header_t *symt, uint32_t addr, symtable_entry_t *entries, int max_entries);
+bool symt_find_symbol(symtable_header_t *symt, uint32_t addr, symtable_entry_t *entry);
 
 /**
  * @brief Fetch the function name of an entry

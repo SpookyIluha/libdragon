@@ -19,7 +19,6 @@
 #include "kernel/kernel_internal.h"
 #include "regsinternal.h"
 #include "kirq.h"
-#include "accounting_internal.h"
 
 /**
  * @name SI status register bit definitions
@@ -262,8 +261,7 @@ void joybus_exec( const void * input, void * output )
     kirq_wait_t w = kirq_begin_wait_si();
 
     joybus_exec_async(input, callback, NULL);
-
-    ACCT_SCOPE(ACCT_CAT_JOYBUS) while (!done) {
+    while (!done) {
         if (__kernel) {
             kirq_wait(&w);
         } else {
