@@ -70,6 +70,7 @@ static bool vi_bug_workaround = false;
 
 // RDP interlacing variables
 
+volatile bool __rdpinterlacelastlinedrawniseven = false;
 /** @brief Whether the rdp interlacing should be on */
 volatile bool __rdpinterlace = false;
 /** @brief Which field should the rdp draw - true = odd field, false = even fields */
@@ -193,6 +194,33 @@ bool iseven(int x){
     return ((x & 1) == 0);
 }
 
+long long frame_debug = 0;
+
+void vi_show_lineshift(surface_t *fb, int lineshift)
+{
+    if (!fb) {
+        vi_write_begin();
+        vi_blank(true);
+        vi_write(VI_ORIGIN, 0);
+        vi_write(VI_WIDTH, 8);
+        vi_write_end();
+        return;
+    }
+
+    tex_format_t fmt = surface_get_format(fb);
+    assert(fmt == FMT_RGBA16 || fmt == FMT_RGBA32);
+    int bpp_shift = fmt == FMT_RGBA16 ? 1 : 2;
+    int bpp = 1 << bpp_shift;
+    assert(PhysicalAddr(fb->buffer) % 8 == 0);
+    assert(fb->stride % 8 == 0);
+    vi_write_begin();
+    vi_blank(false);
+    vi_set_origin(fb->buffer + fb->stride * lineshift, fb->stride >> bpp_shift, bpp * 8);
+    vi_set_xscale(fb->width);
+    vi_set_yscale(fb->height);
+    vi_write_end();
+}
+
 /**
  * @brief Interrupt handler for vertical blank
  *
@@ -212,8 +240,9 @@ static void __display_callback(void *arg)
     /* Check if the next buffer is ready to be displayed, otherwise just
        leave up the current frame. If full interlace mode is selected
        then don't update the buffer until two fields were displayed. */
-
+    vi_write_begin();
     if(__interlace_mode == INTERLACE_RDP){
+        frame_debug++;
         bool newframe = false;  // switch the buffer when strict conditions are met for the schedule
         if(!evenlinenext && __viiphase <= __rdpiphase && fps_limit_ok()) {__viiphase++; newframe = true;}
         else{
@@ -221,9 +250,49 @@ static void __display_callback(void *arg)
             if(!iseven(__viiphase) && evenlinenext && __viiphase < __rdpiphase && fps_limit_ok()) {__viiphase++; newframe = true;}
         }
         update_fps(newframe);
-
-        if(evenlinenext){now_showing = ((__viiphase / 2) + 1) % __buffers;}  // set the current showing buffer
-        else {now_showing = ((__viiphase + 1) / 2) % __buffers;}
+        if(__buffers == 2){
+            if(newframe){
+                if(evenlinenext){now_showing = ((__viiphase / 2) + 1) % __buffers; __rdpinterlacelastlinedrawniseven = true;}  // set the current showing buffer
+                else {now_showing = ((__viiphase + 1) / 2) % __buffers; __rdpinterlacelastlinedrawniseven = false;}
+                vi_show(&surfaces[now_showing]);
+            } else{
+                if(evenlinenext){now_showing = (((__viiphase - 1) / 2) + 1) % __buffers; __rdpinterlacelastlinedrawniseven = true;}  // set the current showing buffer
+                else {now_showing = (((__viiphase - 1) + 1) / 2) % __buffers; __rdpinterlacelastlinedrawniseven = false;}
+                vi_show(&surfaces[now_showing]);
+                // show the last shown field (shifting it around, causing a drop to 240p), effectively the movement is paused until we get a new frame
+                /*if(__rdpinterlacelastlinedrawniseven){
+                    if(evenlinenext)
+                        vi_show_lineshift(&surfaces[now_showing], 0);
+                    else vi_show_lineshift(&surfaces[now_showing], -1); 
+                } else {
+                    if(evenlinenext)
+                        vi_show_lineshift(&surfaces[now_showing], 1);
+                    else vi_show_lineshift(&surfaces[now_showing], 0);
+                }*/
+            }
+        }
+        else{
+            if(newframe){
+                if(evenlinenext){now_showing = ((__viiphase / 2) + 1) % __buffers; __rdpinterlacelastlinedrawniseven = true;}  // set the current showing buffer
+                else {now_showing = ((__viiphase + 1) / 2) % __buffers; __rdpinterlacelastlinedrawniseven = false;}
+                vi_show(&surfaces[now_showing]);
+            } else{
+                if(evenlinenext){now_showing = (((__viiphase + 1) / 2) + 1) % __buffers; __rdpinterlacelastlinedrawniseven = true;}  // set the current showing buffer
+                else {now_showing = (((__viiphase + 1) + 1) / 2) % __buffers; __rdpinterlacelastlinedrawniseven = false;}
+                vi_show(&surfaces[now_showing]);
+                // show the last shown field (shifting it around, causing a drop to 240p), effectively the movement is paused until we get a new frame
+                /*if(__rdpinterlacelastlinedrawniseven){
+                    if(evenlinenext)
+                        vi_show_lineshift(&surfaces[now_showing], 0);
+                    else vi_show_lineshift(&surfaces[now_showing], -1); 
+                } else {
+                    if(evenlinenext)
+                        vi_show_lineshift(&surfaces[now_showing], 1);
+                    else vi_show_lineshift(&surfaces[now_showing], 0);
+                }*/
+            }
+        }
+        //debugf("__rdpiphase %d, __viiphase %d, newframe %d, evenlinenext %d, now_showing %i\n", __rdpiphase, __viiphase, (int)newframe, (int)evenlinenext, now_showing);
     }
     else if (!(__interlace_mode == INTERLACE_FULL && evenlinenext) && fps_limit_ok()) {
         bool newframe = false;
@@ -234,10 +303,9 @@ static void __display_callback(void *arg)
             newframe = true;
         }
         update_fps(newframe);
+        vi_show(&surfaces[now_showing]);
     }
 
-    vi_write_begin();
-    vi_show(&surfaces[now_showing]);
     if ( vi_bug_workaround ) vi_write(VI_X_SCALE, 0x201);
     vi_write_end();
 }
@@ -374,11 +442,12 @@ void display_init( resolution_t res, bitdepth_t bit, uint32_t num_buffers, gamma
         /* Set parameters necessary for drawing */
         /* Grab a location to render to */
         tex_format_t format = bit == DEPTH_16_BPP ? FMT_RGBA16 : FMT_RGBA32;
-        surfaces[i] = surface_alloc(format, __width, __height);
+        surfaces[i] = surface_alloc(format, __width, __height + 1);
+        surfaces[i].height = __height;
         assert(surfaces[i].buffer != NULL);
 
         /* Baseline is blank */
-        memset( surfaces[i].buffer, 0, __width * __height * __bitdepth );
+        memset( surfaces[i].buffer, 0, __width * (__height + 1) * __bitdepth );
     }
 
 #if 0
@@ -516,18 +585,22 @@ surface_t* display_try_get(void)
        wait for that buffer to be shown. */
     if(__interlace_mode == INTERLACE_RDP){
         volatile bool isdrawing = true;
-        volatile bool viphase = __viiphase;
+        //volatile bool viphase = __viiphase;
 
         while(isdrawing) {isdrawing = __rdpidrawing; }  // wait for the RDP if we're way too slow
         while(__viiphase < (__rdpiphase - 1)) {} // wait for VI if we're way too fast
 
         __rdpidrawing = true;
-        int surfindex = ((__rdpiphase / 2) + 2) % __buffers;
+        volatile int surfindex = (((__rdpiphase + 1) / 2) + 2) % __buffers;
         __rdpbuffer = surfindex;
         retval = &surfaces[surfindex];
 
         __rdpinterlace = true;
-        __rdpfield = iseven(__rdpiphase)? false : true;
+        if(__buffers == 2){
+            __rdpfield = iseven((__rdpiphase + 1))? false : true;
+        }
+        else __rdpfield = iseven((__rdpiphase + 1))? false : true;
+        //debugf("NOW DRAWING: __rdpiphase %i, surfindex %i, __rdpfield %d\n", __rdpiphase, surfindex, __rdpfield);
     } else {
         disable_interrupts();
         next = buffer_next(now_showing);

@@ -8,7 +8,7 @@ N64_ROM_TITLE = "Made with libdragon" # Override this with the name of your game
 N64_ROM_CATEGORY = # Set an N64 Media Category code in the ROM header (N, D, C, E, Z)
 N64_ROM_SAVETYPE = # Supported savetypes: none eeprom4k eeprom16 sram256k sram768k sram1m flashram
 N64_ROM_RTC = # Set to true to enable the Joybus Real-Time Clock
-N64_ROM_REGIONFREE = # Set to true to allow booting on any console region
+N64_ROM_REGIONFREE ?= 1 # Set to true to allow booting on any console region
 N64_ROM_REGION = # Set to a region code (emulators will boot on a specific console region)
 N64_ROM_ELFCOMPRESS ?= 1 # Set compression level of ELF file in ROM
 N64_ROM_DSOCOMPRESS ?= 1 # Set compression level of DSOs file in ROM
@@ -88,6 +88,7 @@ N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER1),--controller1 $(N64_ROM_CO
 N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER2),--controller2 $(N64_ROM_CONTROLLER2))
 N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER3),--controller3 $(N64_ROM_CONTROLLER3))
 N64_ED64ROMCONFIGFLAGS += $(if $(N64_ROM_CONTROLLER4),--controller4 $(N64_ROM_CONTROLLER4))
+N64_METADATAFLAGS = $(if $(V),-v) 
 
 # If metadata is used, disable padding to avoid double padding (n64tool + n64metadata).
 # n64metadata will handle the final 16 KiB padding.
@@ -139,7 +140,7 @@ RSPASFLAGS+=-MMD
 		$(N64_ED64ROMCONFIG) $(N64_ED64ROMCONFIGFLAGS) $(BUILD_DIR)/$@.tmp; \
 	fi
 	if [ ! -z "$(N64_ROM_METADATA)" ]; then \
-		$(N64_METADATA) $(if $(V),-v) $(BUILD_DIR)/$@.tmp $(N64_ROM_METADATA); \
+		$(N64_METADATA) $(N64_METADATAFLAGS) $(BUILD_DIR)/$@.tmp $(N64_ROM_METADATA); \
 	fi
 	@mv $(BUILD_DIR)/$@.tmp $@
 
